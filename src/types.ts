@@ -14,7 +14,7 @@ export interface UserProfile {
   onboardingComplete: boolean
 }
 
-export interface ExampleSentence { japanese: string; reading?: string; korean: string }
+export interface ExampleSentence { japanese: string; reading?: string; pronunciation?: string; korean: string }
 
 export interface Vocabulary {
   id: string; word: string; reading: string; meaning: string; partOfSpeech: string; example: ExampleSentence; related?: string[]

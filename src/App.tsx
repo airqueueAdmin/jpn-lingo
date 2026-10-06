@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { grammar, getLesson, getPhase, getQuestion, kanji, lessons, phases, questions, vocabulary } from './data/content'
 import { jlptExamInfo, jlptLevels, jlptOfficialLinks, type JlptLevel } from './data/jlpt'
 import { askTutor, type TutorResponse } from './services/tutor'
+import { assessLearnerLevel, levelForExperience, levelForLessonId } from './services/learner-level'
 import { BannerAd, RewardedAdCard, useFullscreenAd } from './components/ads'
 import { NotificationConsentCard } from './components/notification'
 import { daysUntil, hydrateState, initialState, loadState, saveNativeState, saveState, shouldUseNativeStorage, todayKey } from './lib/storage'
@@ -16,6 +17,31 @@ const experienceOptions: { value: Experience; label: string; detail: string }[] 
 ]
 const minutesOptions: { value: DailyMinutes; label: string }[] = [{ value: 15, label: '15분' }, { value: 30, label: '30분' }, { value: 45, label: '45분' }, { value: 60, label: '60분' }, { value: 90, label: '90분 이상' }]
 const goalOptions: { value: JlptLevel; detail: string }[] = [{ value: 'N5', detail: '기초 일본어' }, { value: 'N4', detail: '기본 일본어' }, { value: 'N3', detail: '일상 일본어' }, { value: 'N2', detail: '중고급 일본어' }, { value: 'N1', detail: '고급 일본어' }]
+
+type LevelEventParam = string | number | boolean | null | undefined
+
+function progressAfterAnswers(progress: UserProgress, results: QuizResult[]): UserProgress {
+  const answeredQuestionIds = Array.from(new Set([...progress.answeredQuestionIds, ...results.map((result) => result.questionId)]))
+  const correctQuestionIds = Array.from(new Set([...progress.correctQuestionIds, ...results.filter((result) => result.correct).map((result) => result.questionId)]))
+  return { ...progress, answeredQuestionIds, correctQuestionIds }
+}
+
+function trackLearnerLevelSnapshot(profile: UserProfile | null, progress: UserProgress, source: string, extra: Record<string, LevelEventParam> = {}) {
+  if (!profile) return null
+  const assessment = assessLearnerLevel(progress, levelForExperience(profile.experience))
+  logAppEvent('learner_level_snapshot', {
+    source,
+    estimated_level: assessment.estimatedLevel,
+    confidence: assessment.confidence,
+    evidence_count: assessment.evidenceCount,
+    overall_accuracy: assessment.overallAccuracy,
+    self_reported_level: levelForExperience(profile.experience),
+    goal_level: profile.goal,
+    current_lesson_id: progress.currentLessonId,
+    ...extra,
+  })
+  return assessment
+}
 
 function App() {
   const [state, setState] = useState<AppState>(() => loadState())
@@ -35,6 +61,10 @@ function App() {
   useEffect(() => {
     logAppEvent('app_open', { entry_view: viewFromLocation() })
   }, [])
+  useEffect(() => {
+    if (!cloudReady || !migrationReady || !state.profile?.onboardingComplete) return
+    trackLearnerLevelSnapshot(state.profile, state.progress, 'app_open')
+  }, [cloudReady, migrationReady])
   useEffect(() => {
     logScreen(activeLessonId ? 'lesson' : view, activeLessonId ? { lesson_id: activeLessonId } : {})
   }, [activeLessonId, view])
@@ -71,13 +101,39 @@ function App() {
 
   if (!cloudReady || !migrationReady) return <LoadingScreen />
   if (!state.profile?.onboardingComplete) {
-    return <OnboardingScreen onComplete={(profile, startLessonId) => { setState({ ...initialState, profile, progress: { ...initialState.progress, currentLessonId: startLessonId } }); setView('home') }} />
+    return <OnboardingScreen onComplete={(profile, startLessonId) => {
+      const nextState = { ...initialState, profile, progress: { ...initialState.progress, currentLessonId: startLessonId } }
+      setState(nextState)
+      logAppEvent('onboarding_completed', { self_reported_level: levelForExperience(profile.experience), goal_level: profile.goal, start_lesson_id: startLessonId, daily_minutes: profile.dailyMinutes })
+      trackLearnerLevelSnapshot(profile, nextState.progress, 'onboarding_completed')
+      setView('home')
+    }} />
   }
 
   const profile = state.profile
   const progress = state.progress
   const activeLesson = activeLessonId ? getLesson(activeLessonId) : null
-  const startLesson = (lessonId = progress.currentLessonId) => { logClick('lesson_start', { lesson_id: lessonId, source: view }); setActiveLessonId(lessonId); setLessonMode('lesson'); setLessonResults([]); setView('learn') }
+  const startLesson = (lessonId = progress.currentLessonId) => { logClick('lesson_start', { lesson_id: lessonId, source: view }); logAppEvent('learning_session_started', { lesson_id: lessonId, lesson_level: levelForLessonId(lessonId), goal_level: profile.goal, source: view }); setActiveLessonId(lessonId); setLessonMode('lesson'); setLessonResults([]); setView('learn') }
+
+  const recordQuizAnswer = (lesson: Lesson, question: QuizQuestion, result: QuizResult, index: number, total: number, sessionResults: QuizResult[]) => {
+    const signalProgress = progressAfterAnswers(progress, sessionResults)
+    const assessment = assessLearnerLevel(signalProgress, levelForExperience(profile.experience))
+    logAppEvent('learner_level_signal', {
+      source: 'lesson_quiz',
+      lesson_id: lesson.id,
+      question_id: question.id,
+      question_level: levelForLessonId(question.lessonId),
+      category: question.category,
+      question_index: index + 1,
+      question_count: total,
+      is_correct: result.correct,
+      estimated_level: assessment.estimatedLevel,
+      confidence: assessment.confidence,
+      evidence_count: assessment.evidenceCount,
+      overall_accuracy: assessment.overallAccuracy,
+      goal_level: profile.goal,
+    })
+  }
 
   const completeLesson = (lesson: Lesson, results: QuizResult[]) => {
     logAppEvent('lesson_complete', { lesson_id: lesson.id, correct_count: results.filter((result) => result.correct).length, question_count: results.length })
@@ -106,6 +162,12 @@ function App() {
     const today = todayKey()
     const wasStudyingToday = progress.lastStudyDate === today
     const newProgress: UserProgress = { ...progress, currentLessonId: nextLesson.id, completedLessons, answeredQuestionIds: answeredIds, correctQuestionIds: correctIds, wrongAnswers: nextWrong, reviewItemIds: nextWrong.filter((item) => !item.resolved).map((item) => item.id), completedToday: true, totalMinutes: progress.totalMinutes + lesson.duration, streak: wasStudyingToday ? progress.streak : progress.streak + 1, lastStudyDate: today, phaseProgress, categoryAccuracy }
+    const lessonAccuracy = results.length ? Math.round((results.filter((result) => result.correct).length / results.length) * 100) : 0
+    const previousAssessment = assessLearnerLevel(progress, levelForExperience(profile.experience))
+    const nextAssessment = trackLearnerLevelSnapshot(profile, newProgress, 'lesson_complete', { lesson_id: lesson.id, lesson_level: levelForLessonId(lesson.id), lesson_accuracy: lessonAccuracy, question_count: results.length, wrong_count: results.filter((result) => !result.correct).length })
+    if (nextAssessment && nextAssessment.estimatedLevel !== previousAssessment.estimatedLevel) {
+      logAppEvent('learner_level_updated', { source: 'lesson_complete', previous_level: previousAssessment.estimatedLevel, estimated_level: nextAssessment.estimatedLevel, confidence: nextAssessment.confidence, lesson_id: lesson.id })
+    }
     setState((current) => ({ ...current, progress: newProgress }))
     setLessonMode('result'); setLessonResults(results)
   }
@@ -114,11 +176,11 @@ function App() {
   const navItems: { id: View; icon: string; label: string }[] = [{ id: 'home', icon: '⌂', label: '홈' }, { id: 'roadmap', icon: '◎', label: '로드맵' }, { id: 'learn', icon: '◌', label: '학습' }, { id: 'review', icon: '↻', label: '복습' }, { id: 'more', icon: '•••', label: '더보기' }]
 
   const renderView = () => {
-  if (activeLesson && lessonMode) return <LessonFlow lesson={activeLesson} mode={lessonMode} initialResults={lessonResults} onStartQuiz={() => setLessonMode('quiz')} onComplete={(results) => completeLesson(activeLesson, results)} onFinish={finishLesson} onTutor={() => setTutorOpen(true)} />
+  if (activeLesson && lessonMode) return <LessonFlow lesson={activeLesson} mode={lessonMode} initialResults={lessonResults} onStartQuiz={() => setLessonMode('quiz')} onComplete={(results) => completeLesson(activeLesson, results)} onAnswer={(question, result, index, total, sessionResults) => recordQuizAnswer(activeLesson, question, result, index, total, sessionResults)} onFinish={finishLesson} onTutor={() => setTutorOpen(true)} />
     if (view === 'home') return <HomeScreen profile={profile} progress={progress} onStart={() => startLesson()} onNavigate={(nextView) => { logClick('navigation', { destination: nextView }); setView(nextView) }} />
     if (view === 'roadmap') return <RoadmapScreen progress={progress} goal={profile.goal} onStartLesson={startLesson} />
     if (view === 'learn') return <LearnScreen progress={progress} onStartLesson={startLesson} />
-    if (view === 'review') return <ReviewScreen progress={progress} onUpdate={(next) => setState((current) => ({ ...current, progress: next }))} />
+    if (view === 'review') return <ReviewScreen progress={progress} onUpdate={(next) => { setState((current) => ({ ...current, progress: next })); if (progress.reviewItemIds.length && next.reviewItemIds.length === 0) trackLearnerLevelSnapshot(profile, next, 'review_complete', { reviewed_count: progress.reviewItemIds.length }) }} />
     if (view === 'exam') return <ExamInfoScreen goal={profile.goal} />
     if (view === 'more') return <MoreScreen onNavigate={setView} />
     return <ProfileScreen profile={profile} progress={progress} tutorOpen={tutorOpen} setTutorOpen={setTutorOpen} />
@@ -157,8 +219,13 @@ function OnboardingScreen({ onComplete }: { onComplete: (profile: UserProfile, s
 }
 
 function DiagnosisQuestions({ answers, setAnswers, onFinish }: { answers: Record<string, string>; setAnswers: (next: Record<string, string>) => void; onFinish: () => void }) {
-  const items = [{ id: 'kana', label: '「あ」의 읽기는?', options: ['a', 'ka', 'sa'] }, { id: 'word', label: '「学生」의 뜻은?', options: ['학생', '선생님', '회사'] }, { id: 'grammar', label: '학교에 갑니다: 学校 ___ 行きます.', options: ['に', 'を', 'で'] }]
-  return <div className="diagnosis-list">{items.map((item, index) => <div className="diagnosis-item" key={item.id}><span className="question-number">0{index + 1}</span><div><strong>{item.label}</strong><div className="mini-options">{item.options.map((option) => <button key={option} className={answers[item.id] === option ? 'mini-option selected' : 'mini-option'} onClick={() => setAnswers({ ...answers, [item.id]: option })}>{option}</button>)}</div></div></div>)}<button className="secondary-button wide" disabled={Object.keys(answers).length < items.length} onClick={onFinish}>진단 결과 보기</button></div>
+  const items = [{ id: 'kana', label: '「あ」의 읽기는?', category: '문자', level: '입문', answer: 'a', options: ['a', 'ka', 'sa'] }, { id: 'word', label: '「学生」의 뜻은?', category: '어휘', level: 'N5', answer: '학생', options: ['학생', '선생님', '회사'] }, { id: 'grammar', label: '학교에 갑니다: 学校 ___ 行きます.', category: '문법', level: '기초', answer: 'に', options: ['に', 'を', 'で'] }]
+  const finish = () => {
+    const correctCount = items.filter((item) => answers[item.id] === item.answer).length
+    logAppEvent('diagnosis_completed', { correct_count: correctCount, question_count: items.length, accuracy: Math.round((correctCount / items.length) * 100) })
+    onFinish()
+  }
+  return <div className="diagnosis-list">{items.map((item, index) => <div className="diagnosis-item" key={item.id}><span className="question-number">0{index + 1}</span><div><strong>{item.label}</strong><div className="mini-options">{item.options.map((option) => <button key={option} className={answers[item.id] === option ? 'mini-option selected' : 'mini-option'} onClick={() => { logAppEvent('diagnosis_answer', { question_id: item.id, question_level: item.level, category: item.category, is_correct: option === item.answer, question_index: index + 1 }); setAnswers({ ...answers, [item.id]: option }) }}>{option}</button>)}</div></div></div>)}<button className="secondary-button wide" disabled={Object.keys(answers).length < items.length} onClick={finish}>진단 결과 보기</button></div>
 }
 
 function DiagnosisResult({ experience, goal, onStart }: { experience: Experience; goal: JlptLevel; onStart: () => void }) {
@@ -203,19 +270,19 @@ function ExamInfoScreen({ goal }: { goal: JlptLevel }) {
 
 function PageHeader({ eyebrow, title, description }: { eyebrow: string; title: string; description: string }) { return <header className="page-header"><p className="eyebrow">{eyebrow}</p><h1>{title}</h1><p>{description}</p></header> }
 
-function LessonFlow({ lesson, mode, initialResults, onStartQuiz, onComplete, onFinish, onTutor }: { lesson: Lesson; mode: 'lesson' | 'quiz' | 'result'; initialResults: QuizResult[]; onStartQuiz: () => void; onComplete: (results: QuizResult[]) => void; onFinish: () => void; onTutor: () => void }) {
+function LessonFlow({ lesson, mode, initialResults, onStartQuiz, onComplete, onAnswer, onFinish, onTutor }: { lesson: Lesson; mode: 'lesson' | 'quiz' | 'result'; initialResults: QuizResult[]; onStartQuiz: () => void; onComplete: (results: QuizResult[]) => void; onAnswer: (question: QuizQuestion, result: QuizResult, index: number, total: number, sessionResults: QuizResult[]) => void; onFinish: () => void; onTutor: () => void }) {
   if (mode === 'lesson') return <LessonIntro lesson={lesson} onStartQuiz={onStartQuiz} onTutor={onTutor} />
-  if (mode === 'quiz') return <QuizRunner lesson={lesson} onComplete={onComplete} />
+  if (mode === 'quiz') return <QuizRunner lesson={lesson} onComplete={onComplete} onAnswer={onAnswer} />
   return <LessonResult lesson={lesson} results={initialResults} onFinish={onFinish} />
 }
 
 function LessonIntro({ lesson, onStartQuiz, onTutor }: { lesson: Lesson; onStartQuiz: () => void; onTutor: () => void }) {
-  return <div className="lesson-flow"><div className="lesson-flow-top"><span>LESSON · {lesson.level}</span><span>⚡ +20 XP</span></div><div className="lesson-hero"><span className="lesson-category">{lesson.category}</span><h1>{lesson.title}</h1><p>{lesson.subtitle}</p></div><section className="concept-block"><p className="eyebrow">오늘의 개념</p><p className="concept-copy">{lesson.concept}</p></section><section className="example-block"><div className="section-heading compact"><div><p className="eyebrow">예문으로 익혀요</p><h2>이렇게 사용해요</h2></div><span className="example-count">{lesson.examples.length} 예문</span></div>{lesson.examples.map((example) => <div className="example-row" key={example.japanese}><strong>{example.japanese}</strong>{example.reading && <small>{example.reading}</small>}<span>{example.korean}</span></div>)}</section><section className="keypoint-block"><p className="eyebrow">핵심 포인트</p>{lesson.keyPoints.map((point, index) => <div className="keypoint" key={point}><span>0{index + 1}</span><p>{point}</p></div>)}</section>{lesson.id === 'n2-grammar' && <button className="tutor-callout" onClick={onTutor}><span className="sparkle">✦</span><span><strong>이해가 막히면 AI 튜터에게</strong><small>わけではない과 わけがない 차이를 물어보세요.</small></span><b>→</b></button>}<button className="primary-button wide lesson-start" onClick={onStartQuiz}>연습 문제 {lesson.questionIds.length}개 풀기 <span>→</span></button></div>
+  return <div className="lesson-flow"><div className="lesson-flow-top"><span>LESSON · {lesson.level}</span><span>⚡ +20 XP</span></div><div className="lesson-hero"><span className="lesson-category">{lesson.category}</span><h1>{lesson.title}</h1><p>{lesson.subtitle}</p></div><section className="concept-block"><p className="eyebrow">오늘의 개념</p><p className="concept-copy">{lesson.concept}</p></section><section className="example-block"><div className="section-heading compact"><div><p className="eyebrow">예문으로 익혀요</p><h2>이렇게 사용해요</h2></div><span className="example-count">{lesson.examples.length} 예문</span></div>{lesson.examples.map((example) => <div className="example-row" key={example.japanese}><strong>{example.japanese}</strong>{example.reading && <small>{example.reading}</small>}{example.pronunciation && <small className="example-pronunciation">{example.pronunciation}</small>}<span>{example.korean}</span></div>)}</section><section className="keypoint-block"><p className="eyebrow">핵심 포인트</p>{lesson.keyPoints.map((point, index) => <div className="keypoint" key={point}><span>0{index + 1}</span><p>{point}</p></div>)}</section>{lesson.id === 'n2-grammar' && <button className="tutor-callout" onClick={onTutor}><span className="sparkle">✦</span><span><strong>이해가 막히면 AI 튜터에게</strong><small>わけではない과 わけがない 차이를 물어보세요.</small></span><b>→</b></button>}<button className="primary-button wide lesson-start" onClick={onStartQuiz}>연습 문제 {lesson.questionIds.length}개 풀기 <span>→</span></button></div>
 }
 
-function QuizRunner({ lesson, onComplete }: { lesson: Lesson; onComplete: (results: QuizResult[]) => void }) {
+function QuizRunner({ lesson, onComplete, onAnswer }: { lesson: Lesson; onComplete: (results: QuizResult[]) => void; onAnswer: (question: QuizQuestion, result: QuizResult, index: number, total: number, sessionResults: QuizResult[]) => void }) {
   const quizQuestions = lesson.questionIds.map(getQuestion).filter((question): question is QuizQuestion => Boolean(question)); const [index, setIndex] = useState(0); const [selected, setSelected] = useState(''); const [checked, setChecked] = useState(false); const [results, setResults] = useState<QuizResult[]>([]); const question = quizQuestions[index]; const isCorrect = selected === question.answer
-  const next = () => { if (!checked) { setChecked(true); return } const result: QuizResult = { questionId: question.id, selected, correct: isCorrect }; const nextResults = [...results, result]; if (index === quizQuestions.length - 1) onComplete(nextResults); else { setResults(nextResults); setIndex(index + 1); setSelected(''); setChecked(false) } }
+  const next = () => { if (!checked) { const result: QuizResult = { questionId: question.id, selected, correct: isCorrect }; onAnswer(question, result, index, quizQuestions.length, [...results, result]); setChecked(true); return } const result: QuizResult = { questionId: question.id, selected, correct: isCorrect }; const nextResults = [...results, result]; if (index === quizQuestions.length - 1) onComplete(nextResults); else { setResults(nextResults); setIndex(index + 1); setSelected(''); setChecked(false) } }
   return <div className="quiz-flow"><div className="quiz-top"><span>문제 {index + 1} / {quizQuestions.length}</span><div className="quiz-progress"><i style={{ width: `${((index + 1) / quizQuestions.length) * 100}%` }} /></div><span>{lesson.category}</span></div><div className="quiz-card"><span className="question-type">{question.type === 'reading' ? '읽기' : question.type === 'grammar' ? '문법' : question.type === 'fill-blank' ? '의미' : '선택'}</span><h1>{question.prompt}</h1>{question.context && <p>{question.context}</p>}<div className="answer-options">{question.options.map((option, optionIndex) => <button key={option} disabled={checked} className={checked && option === question.answer ? 'answer-option correct' : checked && option === selected ? 'answer-option incorrect' : selected === option ? 'answer-option selected' : 'answer-option'} onClick={() => setSelected(option)}><span>{String.fromCharCode(65 + optionIndex)}</span>{option}</button>)}</div>{checked && <div className={isCorrect ? 'explanation correct-box' : 'explanation incorrect-box'}><strong>{isCorrect ? '정답이에요!' : '아쉬워요. 다시 기억해봐요.'}</strong><p>{question.explanation}</p><small>TIP · {question.tip}</small></div>}</div><button className="primary-button wide" disabled={!selected} onClick={next}>{checked ? index === quizQuestions.length - 1 ? '결과 확인' : '다음 문제' : '정답 확인'} <span>→</span></button></div>
 }
 
@@ -223,7 +290,7 @@ function LessonResult({ lesson, results, onFinish }: { lesson: Lesson; results: 
 
 function ReviewScreen({ progress, onUpdate }: { progress: UserProgress; onUpdate: (next: UserProgress) => void }) {
   const pending = progress.wrongAnswers.filter((item) => !item.resolved); const [reviewing, setReviewing] = useState(false); const [index, setIndex] = useState(0); const [showAnswer, setShowAnswer] = useState(false)
-  const markDone = () => { const doneId = pending[index]?.id; const nextWrong = progress.wrongAnswers.map((item) => item.id === doneId ? { ...item, resolved: true } : item); onUpdate({ ...progress, wrongAnswers: nextWrong, reviewItemIds: nextWrong.filter((item) => !item.resolved).map((item) => item.id) }); if (index >= pending.length - 1) { setReviewing(false); setIndex(0); setShowAnswer(false) } else { setIndex(index + 1); setShowAnswer(false) } }
+  const markDone = () => { const done = pending[index]; const doneId = done?.id; const question = done ? getQuestion(done.questionId) : undefined; const nextWrong = progress.wrongAnswers.map((item) => item.id === doneId ? { ...item, resolved: true } : item); logAppEvent('review_item_completed', { question_id: done?.questionId, question_level: question ? levelForLessonId(question.lessonId) : undefined, category: question?.category, remaining_count: Math.max(0, pending.length - index - 1) }); onUpdate({ ...progress, wrongAnswers: nextWrong, reviewItemIds: nextWrong.filter((item) => !item.resolved).map((item) => item.id) }); if (index >= pending.length - 1) { logAppEvent('review_session_completed', { reviewed_count: pending.length }); setReviewing(false); setIndex(0); setShowAnswer(false) } else { setIndex(index + 1); setShowAnswer(false) } }
   if (reviewing && pending[index]) { const wrong = pending[index]; const question = getQuestion(wrong.questionId); if (!question) return null; return <div className="review-session"><div className="quiz-top"><span>복습 {index + 1} / {pending.length}</span><div className="quiz-progress"><i style={{ width: `${((index + 1) / pending.length) * 100}%` }} /></div><span>오답</span></div><div className="review-question"><span className="question-type">{question.category}</span><h1>{question.prompt}</h1><div className="your-answer"><small>내가 고른 답</small><strong>{wrong.selected}</strong></div>{showAnswer ? <div className="explanation correct-box"><strong>정답 · {question.answer}</strong><p>{question.explanation}</p><small>관련 포인트 · {question.tip}</small></div> : <button className="secondary-button wide" onClick={() => setShowAnswer(true)}>정답과 해설 보기</button>}</div>{showAnswer && <button className="primary-button wide" onClick={markDone}>복습 완료 <span>→</span></button>}</div> }
   return <><PageHeader eyebrow="REVIEW" title="복습하기" description="틀린 문제를 다시 만나면 실력이 됩니다." /><section className="review-summary"><div><span className="review-big-number">{pending.length}</span><p>오늘 확인할 오답</p></div><div className="review-summary-icon">↻</div></section><div className="review-categories"><ReviewCategory label="단어" value={Math.min(15, vocabulary.length)} icon="単" color="blue" /><ReviewCategory label="한자" value={Math.min(8, kanji.length)} icon="漢" color="orange" /><ReviewCategory label="문법" value={Math.min(5, grammar.length)} icon="文" color="purple" /><ReviewCategory label="오답" value={pending.length} icon="!”" color="green" /></div>{pending.length ? <button className="primary-button wide review-start" onClick={() => setReviewing(true)}>오늘의 복습 시작 <span>→</span></button> : <div className="empty-state"><span>✦</span><h2>복습할 오답이 없어요</h2><p>레슨을 마치면 틀린 문제를 자동으로 모아드려요.</p></div>}<section className="weakness-section"><div className="section-heading compact"><div><p className="eyebrow">INSIGHT</p><h2>나의 학습 분석</h2></div></div><WeaknessChart progress={progress} /></section></>
 }
