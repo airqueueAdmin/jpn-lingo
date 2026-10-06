@@ -1,0 +1,4 @@
+project_id = "nihzrdjtczrgiaurhkdj"
+
+[functions.tutor]
+verify_jwt = true

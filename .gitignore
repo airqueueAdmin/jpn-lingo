@@ -1,0 +1,28 @@
+node_modules
+dist
+.idea/
+supabase/.temp/
+.env
+.env.local
+.env.*
+!.env.example
+.DS_Store
+*.log
+
+*.ait
+
+# Markdown documentation, including README.md
+*.md
+
+# Private keys, certificates, and credential artifacts
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.crt
+*.cer
+*credentials*
+*secret*
+*token*
