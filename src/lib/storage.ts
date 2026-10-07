@@ -1,4 +1,5 @@
 import type { AppState, UserProgress } from '../types'
+import { emptyNewsProgress, mergeNewsProgress, parseNewsProgress } from './news-progress'
 
 const STORAGE_KEY = 'kana-step-app-state-v1'
 const ORIGIN_MIGRATION_KEY = 'japanese-lingo:origin-storage-migrated-v1'
@@ -15,7 +16,7 @@ export const defaultProgress: UserProgress = {
   phaseProgress: { intro: 12, basic: 0, n5: 0, n4: 0, n3: 0, n2: 0, mock: 0 }, categoryAccuracy: { '문자': 0, '어휘': 0, '문법': 0, '한자': 0, '독해': 0, '청해': 0 },
 }
 
-export const initialState: AppState = { profile: null, progress: defaultProgress }
+export const initialState: AppState = { profile: null, progress: defaultProgress, news: emptyNewsProgress }
 
 function parseState(raw: string | null): AppState | null {
   if (!raw) return null
@@ -24,6 +25,7 @@ function parseState(raw: string | null): AppState | null {
     const parsedProgress = (parsed.progress ?? {}) as Partial<UserProgress>
     return {
       profile: parsed.profile ?? null,
+      news: parseNewsProgress(parsed.news),
       progress: {
         ...defaultProgress,
         ...parsedProgress,
@@ -100,6 +102,7 @@ export function mergeAppStates(current: AppState, previous: AppState): AppState 
   }
   return {
     profile: current.profile?.onboardingComplete ? current.profile : previous.profile?.onboardingComplete ? previous.profile : current.profile ?? previous.profile,
+    news: mergeNewsProgress(parseNewsProgress(current.news), parseNewsProgress(previous.news)),
     progress: { ...mergedProgress, completedToday: mergedProgress.lastStudyDate === todayKey() ? mergedProgress.completedToday : false },
   }
 }

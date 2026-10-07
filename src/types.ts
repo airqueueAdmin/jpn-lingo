@@ -2,7 +2,7 @@ import type { JlptLevel } from './data/jlpt'
 
 export type Experience = 'new' | 'kana' | 'basic' | 'n5-n4' | 'n3' | 'n2'
 export type DailyMinutes = 15 | 30 | 45 | 60 | 90
-export type View = 'home' | 'roadmap' | 'learn' | 'review' | 'profile' | 'exam' | 'more'
+export type View = 'home' | 'roadmap' | 'learn' | 'review' | 'profile' | 'exam' | 'more' | 'news'
 export type QuestionType = 'multiple-choice' | 'reading' | 'fill-blank' | 'grammar'
 
 export interface UserProfile {
@@ -46,4 +46,11 @@ export interface UserProgress {
   currentLessonId: string; completedLessons: string[]; answeredQuestionIds: string[]; correctQuestionIds: string[]; reviewItemIds: string[]; wrongAnswers: WrongAnswer[]; completedToday: boolean; totalMinutes: number; streak: number; bonusXp: number; lastStudyDate: string | null; phaseProgress: Record<string, number>; categoryAccuracy: Record<string, number>
 }
 
-export interface AppState { profile: UserProfile | null; progress: UserProgress }
+export interface NewsSave { saved: boolean; updatedAt: string }
+export interface NewsProgress {
+  readArticleIds: string[]
+  bookmarks: Record<string, NewsSave>
+  savedWords: Record<string, NewsSave>
+}
+
+export interface AppState { profile: UserProfile | null; progress: UserProgress; news: NewsProgress }

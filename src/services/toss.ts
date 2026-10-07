@@ -36,6 +36,22 @@ export function logImpression(name: string, params: AnalyticsParams = {}) {
   void log('impression', name, params)
 }
 
+export function subscribeNativeBack(onBack: () => void) {
+  let cancelled = false
+  let unsubscribe: (() => void) | undefined
+  void getSdk().then(({ graniteEvent }) => {
+    if (cancelled) return
+    unsubscribe = graniteEvent.addEventListener('backEvent', {
+      onEvent: onBack,
+      onError: (error) => console.debug('Apps in Toss back event unavailable.', error),
+    })
+  }).catch((error) => console.debug('Apps in Toss back event unavailable.', error))
+  return () => {
+    cancelled = true
+    unsubscribe?.()
+  }
+}
+
 export type NotificationRequestResult = NotificationAgreementResult | 'unconfigured' | 'unsupported' | 'error'
 
 const notificationTemplateCode = import.meta.env.VITE_TOSS_NOTIFICATION_TEMPLATE_CODE as string | undefined

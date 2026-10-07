@@ -5,6 +5,8 @@ import { askTutor, type TutorResponse } from './services/tutor'
 import { assessLearnerLevel, levelForExperience, levelForLessonId } from './services/learner-level'
 import { BannerAd, RewardedAdCard, useFullscreenAd } from './components/ads'
 import { NotificationConsentCard } from './components/notification'
+import { NewsScreen } from './components/news'
+import { updateNewsProgress } from './lib/news-progress'
 import { daysUntil, hydrateState, initialState, loadState, saveNativeState, saveState, shouldUseNativeStorage, todayKey } from './lib/storage'
 import { isSupabaseConfigured, loadRemoteState, saveRemoteState } from './lib/supabase'
 import { logAppEvent, logClick, logScreen } from './services/toss'
@@ -173,11 +175,12 @@ function App() {
   }
 
   const finishLesson = () => { setLessonMode(null); setActiveLessonId(null); setView('home') }
-  const navItems: { id: View; icon: string; label: string }[] = [{ id: 'home', icon: '⌂', label: '홈' }, { id: 'roadmap', icon: '◎', label: '로드맵' }, { id: 'learn', icon: '◌', label: '학습' }, { id: 'review', icon: '↻', label: '복습' }, { id: 'more', icon: '•••', label: '더보기' }]
+  const navItems: { id: View; icon: string; label: string }[] = [{ id: 'home', icon: '⌂', label: '홈' }, { id: 'news', icon: '▤', label: '뉴스' }, { id: 'learn', icon: '◌', label: '학습' }, { id: 'review', icon: '↻', label: '복습' }, { id: 'more', icon: '•••', label: '더보기' }]
 
   const renderView = () => {
   if (activeLesson && lessonMode) return <LessonFlow lesson={activeLesson} mode={lessonMode} initialResults={lessonResults} onStartQuiz={() => setLessonMode('quiz')} onComplete={(results) => completeLesson(activeLesson, results)} onAnswer={(question, result, index, total, sessionResults) => recordQuizAnswer(activeLesson, question, result, index, total, sessionResults)} onFinish={finishLesson} onTutor={() => setTutorOpen(true)} />
-    if (view === 'home') return <HomeScreen profile={profile} progress={progress} onStart={() => startLesson()} onNavigate={(nextView) => { logClick('navigation', { destination: nextView }); setView(nextView) }} />
+    if (view === 'home') return <><HomeScreen profile={profile} progress={progress} onStart={() => startLesson()} onNavigate={(nextView) => { logClick('navigation', { destination: nextView }); setView(nextView) }} /><button className="news-home-entry" onClick={() => setView('news')}><span aria-hidden="true">読</span><span><strong>뉴스로 읽는 일본어</strong><small>N5부터 N1까지 · 내 수준에 맞는 기사 읽기</small></span><b>→</b></button></>
+    if (view === 'news') return <NewsScreen goal={profile.goal} progress={state.news} onAction={(action) => setState((current) => ({ ...current, news: updateNewsProgress(current.news, action) }))} />
     if (view === 'roadmap') return <RoadmapScreen progress={progress} goal={profile.goal} onStartLesson={startLesson} />
     if (view === 'learn') return <LearnScreen progress={progress} onStartLesson={startLesson} />
     if (view === 'review') return <ReviewScreen progress={progress} onUpdate={(next) => { setState((current) => ({ ...current, progress: next })); if (progress.reviewItemIds.length && next.reviewItemIds.length === 0) trackLearnerLevelSnapshot(profile, next, 'review_complete', { reviewed_count: progress.reviewItemIds.length }) }} />
@@ -186,7 +189,7 @@ function App() {
     return <ProfileScreen profile={profile} progress={progress} tutorOpen={tutorOpen} setTutorOpen={setTutorOpen} />
   }
 
-  return <div className="app-shell"><main className={activeLesson ? 'app-content learning-content' : 'app-content'}>{renderView()}</main>{!activeLesson && <nav className="bottom-nav" aria-label="주요 메뉴">{navItems.map((item) => { const moreActive = item.id === 'more' && (view === 'more' || view === 'exam' || view === 'profile'); return <button className={view === item.id || moreActive ? 'nav-item active' : 'nav-item'} key={item.id} onClick={() => { setView(item.id); setActiveLessonId(null); setLessonMode(null) }}><span className="nav-icon">{item.icon}</span><span>{item.label}</span></button> })}</nav>}</div>
+  return <div className="app-shell"><main className={activeLesson ? 'app-content learning-content' : 'app-content'}>{renderView()}</main>{!activeLesson && <nav className="bottom-nav" aria-label="주요 메뉴">{navItems.map((item) => { const moreActive = item.id === 'more' && (view === 'more' || view === 'exam' || view === 'profile' || view === 'roadmap'); return <button className={view === item.id || moreActive ? 'nav-item active' : 'nav-item'} key={item.id} onClick={() => { setView(item.id); setActiveLessonId(null); setLessonMode(null) }}><span className="nav-icon">{item.icon}</span><span>{item.label}</span></button> })}</nav>}</div>
 }
 
 function LoadingScreen() { return <div className="loading-screen"><div className="loading-logo">j</div><p>학습 공간을 준비하고 있어요…</p></div> }
@@ -194,6 +197,7 @@ function LoadingScreen() { return <div className="loading-screen"><div className
 function viewFromLocation(): View {
   if (typeof window === 'undefined') return 'home'
   const route = window.location.pathname.toLowerCase()
+  if (route.endsWith('/news')) return 'news'
   if (route.endsWith('/roadmap')) return 'roadmap'
   if (route.endsWith('/learn')) return 'learn'
   if (route.endsWith('/review')) return 'review'
@@ -258,7 +262,7 @@ function LearnScreen({ progress, onStartLesson }: { progress: UserProgress; onSt
 }
 
 function MoreScreen({ onNavigate }: { onNavigate: (view: View) => void }) {
-  return <><PageHeader eyebrow="MORE" title="더보기" description="학습 기록과 JLPT 시험 정보를 확인해요." /><div className="more-menu-list"><button className="more-menu-item" onClick={() => onNavigate('exam')}><span className="more-menu-icon blue">▣</span><span><strong>JLPT 시험 정보</strong><small>과목, 시험 시간, 합격·과락 기준</small></span><b>→</b></button><button className="more-menu-item" onClick={() => onNavigate('profile')}><span className="more-menu-icon purple">☻</span><span><strong>내 학습 기록</strong><small>학습 통계와 AI 일본어 튜터</small></span><b>→</b></button></div><section className="more-tip"><span>✦</span><div><p className="eyebrow">JLPT JOURNEY</p><h3>시험 정보와 학습 기록을 함께 확인해요</h3><p>현재 진도와 목표 시험을 비교하면서 다음 학습을 계획할 수 있어요.</p></div></section></>
+  return <><PageHeader eyebrow="MORE" title="더보기" description="학습 기록과 JLPT 시험 정보를 확인해요." /><div className="more-menu-list"><button className="more-menu-item" onClick={() => onNavigate('roadmap')}><span className="more-menu-icon blue">◎</span><span><strong>학습 로드맵</strong><small>입문부터 목표 레벨까지의 학습 순서</small></span><b>→</b></button><button className="more-menu-item" onClick={() => onNavigate('exam')}><span className="more-menu-icon blue">▣</span><span><strong>JLPT 시험 정보</strong><small>과목, 시험 시간, 합격·과락 기준</small></span><b>→</b></button><button className="more-menu-item" onClick={() => onNavigate('profile')}><span className="more-menu-icon purple">☻</span><span><strong>내 학습 기록</strong><small>학습 통계와 AI 일본어 튜터</small></span><b>→</b></button></div><section className="more-tip"><span>✦</span><div><p className="eyebrow">JLPT JOURNEY</p><h3>시험 정보와 학습 기록을 함께 확인해요</h3><p>현재 진도와 목표 시험을 비교하면서 다음 학습을 계획할 수 있어요.</p></div></section></>
 }
 
 function ExamInfoScreen({ goal }: { goal: JlptLevel }) {
