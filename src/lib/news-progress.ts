@@ -32,7 +32,10 @@ export function mergeNewsProgress(current: NewsProgress, previous: NewsProgress)
   }
 }
 
-export type NewsAction = { type: 'read' | 'bookmark' | 'word'; id: string }
+export type NewsAction =
+  | { type: 'read'; id: string; minutes?: number }
+  | { type: 'bookmark'; id: string }
+  | { type: 'word'; id: string; articleId?: string; word?: string; reading?: string; meaning?: string }
 
 export function updateNewsProgress(progress: NewsProgress, action: NewsAction): NewsProgress {
   if (action.type === 'read') return { ...progress, readArticleIds: [...new Set([...progress.readArticleIds, action.id])] }

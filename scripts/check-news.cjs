@@ -34,7 +34,7 @@ const storageKey = 'kana-step-app-state-v1'
 const newsCacheKey = 'japanese-lingo:daily-news-cache-v1'
 const seed = {
   profile: { name: '테스트', experience: 'new', goal: 'N5', examDate: '2026-12-06', dailyMinutes: 30, onboardingComplete: true },
-  progress: { currentLessonId: 'hiragana-basic', completedLessons: [], answeredQuestionIds: [], correctQuestionIds: [], reviewItemIds: [], wrongAnswers: [], completedToday: false, totalMinutes: 0, streak: 0, bonusXp: 0, lastStudyDate: null, phaseProgress: {}, categoryAccuracy: {} },
+  progress: { currentLessonId: 'hiragana-basic', completedLessons: [], answeredQuestionIds: [], correctQuestionIds: [], reviewItemIds: [], wrongAnswers: [], wordReviews: [], completedToday: false, totalMinutes: 0, streak: 0, bonusXp: 0, lastStudyDate: null, studyDates: [], activityByDate: {}, phaseProgress: {}, categoryAccuracy: {} },
 }
 
 function seoulDateKey() {
