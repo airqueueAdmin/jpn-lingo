@@ -6,7 +6,10 @@ import { assessLearnerLevel, levelForExperience, levelForLessonId } from './serv
 import { BannerAd, RewardedAdCard, useFullscreenAd } from './components/ads'
 import { NotificationConsentCard } from './components/notification'
 import { NewsScreen } from './components/news'
+import { KanaPracticeScreen } from './components/kana'
 import { updateNewsProgress } from './lib/news-progress'
+import type { NewsAction } from './lib/news-progress'
+import { createWordReview, dateKey, isReviewDue, recordActivity, scheduleWordReview, scheduleWrongAnswer, weekDateKeys } from './lib/learning'
 import { daysUntil, hydrateState, initialState, loadState, saveNativeState, saveState, shouldUseNativeStorage, todayKey } from './lib/storage'
 import { isSupabaseConfigured, loadRemoteState, saveRemoteState } from './lib/supabase'
 import { logAppEvent, logClick, logScreen } from './services/toss'
@@ -144,7 +147,7 @@ function App() {
     const nextWrong: WrongAnswer[] = [...progress.wrongAnswers]
     results.filter((result) => !result.correct).forEach((result) => {
       const existing = nextWrong.find((wrong) => wrong.questionId === result.questionId && !wrong.resolved)
-      if (!existing) nextWrong.push({ id: `${result.questionId}-${Date.now()}`, questionId: result.questionId, selected: result.selected, createdAt: new Date().toISOString(), resolved: false })
+      if (!existing) nextWrong.push({ id: `${result.questionId}-${Date.now()}`, questionId: result.questionId, selected: result.selected, createdAt: new Date().toISOString(), nextReviewAt: new Date().toISOString(), intervalDays: 0, correctStreak: 0, attempts: 0, resolved: false })
     })
     const completedLessons = Array.from(new Set([...progress.completedLessons, lesson.id]))
     const lessonIndex = lessons.findIndex((item) => item.id === lesson.id)
@@ -162,8 +165,8 @@ function App() {
       categoryAccuracy[category as keyof typeof categoryAccuracy] = categoryQuestions.length ? Math.round((categoryQuestions.filter((question) => correctIds.includes(question.id)).length / categoryQuestions.length) * 100) : 0
     })
     const today = todayKey()
-    const wasStudyingToday = progress.lastStudyDate === today
-    const newProgress: UserProgress = { ...progress, currentLessonId: nextLesson.id, completedLessons, answeredQuestionIds: answeredIds, correctQuestionIds: correctIds, wrongAnswers: nextWrong, reviewItemIds: nextWrong.filter((item) => !item.resolved).map((item) => item.id), completedToday: true, totalMinutes: progress.totalMinutes + lesson.duration, streak: wasStudyingToday ? progress.streak : progress.streak + 1, lastStudyDate: today, phaseProgress, categoryAccuracy }
+    const baseProgress: UserProgress = { ...progress, currentLessonId: nextLesson.id, completedLessons, answeredQuestionIds: answeredIds, correctQuestionIds: correctIds, wrongAnswers: nextWrong, reviewItemIds: nextWrong.filter((item) => !item.resolved).map((item) => item.id), completedToday: true, totalMinutes: progress.totalMinutes + lesson.duration, lastStudyDate: today, phaseProgress, categoryAccuracy }
+    const newProgress = recordActivity(baseProgress, 'lessons', lesson.duration)
     const lessonAccuracy = results.length ? Math.round((results.filter((result) => result.correct).length / results.length) * 100) : 0
     const previousAssessment = assessLearnerLevel(progress, levelForExperience(profile.experience))
     const nextAssessment = trackLearnerLevelSnapshot(profile, newProgress, 'lesson_complete', { lesson_id: lesson.id, lesson_level: levelForLessonId(lesson.id), lesson_accuracy: lessonAccuracy, question_count: results.length, wrong_count: results.filter((result) => !result.correct).length })
@@ -175,21 +178,34 @@ function App() {
   }
 
   const finishLesson = () => { setLessonMode(null); setActiveLessonId(null); setView('home') }
+  const handleNewsAction = (action: NewsAction) => setState((current) => {
+    const wasSaved = action.type === 'word' && Boolean(current.news.savedWords[action.id]?.saved)
+    let nextProgress = current.progress
+    if (action.type === 'read' && !current.news.readArticleIds.includes(action.id)) nextProgress = recordActivity(nextProgress, 'news', action.minutes ?? 3)
+    if (action.type === 'word') {
+      if (wasSaved) nextProgress = { ...nextProgress, wordReviews: nextProgress.wordReviews.filter((item) => item.id !== action.id) }
+      else if (action.articleId && action.word && action.reading && action.meaning && !nextProgress.wordReviews.some((item) => item.id === action.id)) {
+        nextProgress = { ...nextProgress, wordReviews: [...nextProgress.wordReviews, createWordReview(action.id, action.articleId, action.word, action.reading, action.meaning)] }
+      }
+    }
+    return { ...current, progress: nextProgress, news: updateNewsProgress(current.news, action) }
+  })
   const navItems: { id: View; icon: string; label: string }[] = [{ id: 'home', icon: '⌂', label: '홈' }, { id: 'news', icon: '▤', label: '뉴스' }, { id: 'learn', icon: '◌', label: '학습' }, { id: 'review', icon: '↻', label: '복습' }, { id: 'more', icon: '•••', label: '더보기' }]
 
   const renderView = () => {
   if (activeLesson && lessonMode) return <LessonFlow lesson={activeLesson} mode={lessonMode} initialResults={lessonResults} onStartQuiz={() => setLessonMode('quiz')} onComplete={(results) => completeLesson(activeLesson, results)} onAnswer={(question, result, index, total, sessionResults) => recordQuizAnswer(activeLesson, question, result, index, total, sessionResults)} onFinish={finishLesson} onTutor={() => setTutorOpen(true)} />
     if (view === 'home') return <><HomeScreen profile={profile} progress={progress} onStart={() => startLesson()} onNavigate={(nextView) => { logClick('navigation', { destination: nextView }); setView(nextView) }} /><button className="news-home-entry" onClick={() => setView('news')}><span aria-hidden="true">読</span><span><strong>뉴스로 읽는 일본어</strong><small>N5부터 N1까지 · 내 수준에 맞는 기사 읽기</small></span><b>→</b></button></>
-    if (view === 'news') return <NewsScreen goal={profile.goal} progress={state.news} onAction={(action) => setState((current) => ({ ...current, news: updateNewsProgress(current.news, action) }))} />
+    if (view === 'news') return <NewsScreen goal={profile.goal} progress={state.news} onAction={handleNewsAction} />
     if (view === 'roadmap') return <RoadmapScreen progress={progress} goal={profile.goal} onStartLesson={startLesson} />
-    if (view === 'learn') return <LearnScreen progress={progress} onStartLesson={startLesson} />
+    if (view === 'learn') return <LearnScreen progress={progress} onStartLesson={startLesson} onNavigate={setView} />
+    if (view === 'kana') return <KanaPracticeScreen progress={progress} onUpdate={(next) => setState((current) => ({ ...current, progress: next }))} onBack={() => setView('learn')} />
     if (view === 'review') return <ReviewScreen progress={progress} onUpdate={(next) => { setState((current) => ({ ...current, progress: next })); if (progress.reviewItemIds.length && next.reviewItemIds.length === 0) trackLearnerLevelSnapshot(profile, next, 'review_complete', { reviewed_count: progress.reviewItemIds.length }) }} />
     if (view === 'exam') return <ExamInfoScreen goal={profile.goal} />
     if (view === 'more') return <MoreScreen onNavigate={setView} />
     return <ProfileScreen profile={profile} progress={progress} tutorOpen={tutorOpen} setTutorOpen={setTutorOpen} />
   }
 
-  return <div className="app-shell"><main className={activeLesson ? 'app-content learning-content' : 'app-content'}>{renderView()}</main>{!activeLesson && <nav className="bottom-nav" aria-label="주요 메뉴">{navItems.map((item) => { const moreActive = item.id === 'more' && (view === 'more' || view === 'exam' || view === 'profile' || view === 'roadmap'); return <button className={view === item.id || moreActive ? 'nav-item active' : 'nav-item'} key={item.id} onClick={() => { setView(item.id); setActiveLessonId(null); setLessonMode(null) }}><span className="nav-icon">{item.icon}</span><span>{item.label}</span></button> })}</nav>}</div>
+  return <div className="app-shell"><main className={activeLesson ? 'app-content learning-content' : 'app-content'}>{renderView()}</main>{!activeLesson && <nav className="bottom-nav" aria-label="주요 메뉴">{navItems.map((item) => { const moreActive = item.id === 'more' && (view === 'more' || view === 'exam' || view === 'profile' || view === 'roadmap' || view === 'kana'); return <button className={view === item.id || moreActive ? 'nav-item active' : 'nav-item'} key={item.id} onClick={() => { setView(item.id); setActiveLessonId(null); setLessonMode(null) }}><span className="nav-icon">{item.icon}</span><span>{item.label}</span></button> })}</nav>}</div>
 }
 
 function LoadingScreen() { return <div className="loading-screen"><div className="loading-logo">j</div><p>학습 공간을 준비하고 있어요…</p></div> }
@@ -204,6 +220,7 @@ function viewFromLocation(): View {
   if (route.endsWith('/profile')) return 'profile'
   if (route.endsWith('/exam') || route.endsWith('/test-info')) return 'exam'
   if (route.endsWith('/more')) return 'more'
+  if (route.endsWith('/kana')) return 'kana'
   return 'home'
 }
 
@@ -244,11 +261,44 @@ function phasesForGoal(goal: JlptLevel) {
 }
 
 function HomeScreen({ profile, progress, onStart, onNavigate }: { profile: UserProfile; progress: UserProgress; onStart: () => void; onNavigate: (view: View) => void }) {
-  const currentLesson = getLesson(progress.currentLessonId); const phase = getPhase(currentLesson.phaseId); const days = daysUntil(profile.examDate); const goalPhases = phasesForGoal(profile.goal); const totalProgress = Math.round(goalPhases.reduce((sum, item) => sum + (progress.phaseProgress[item.id] ?? 0), 0) / goalPhases.length); const reviewCount = progress.wrongAnswers.filter((item) => !item.resolved).length; const accuracy = progress.answeredQuestionIds.length ? Math.round((progress.correctQuestionIds.length / progress.answeredQuestionIds.length) * 100) : 0; const xp = progress.totalMinutes * 10 + progress.correctQuestionIds.length * 5 + progress.completedLessons.length * 20 + progress.bonusXp
-  return <><header className="topbar"><div><p className="brand-mini">japanese-lingo</p><p className="greeting">안녕하세요, <strong>{profile.name}</strong>님 <span>✦</span></p><div className="top-status"><span>🔥 {progress.streak}일 연속</span><span>⚡ {xp} XP</span></div></div><button className="icon-button" onClick={() => onNavigate('profile')} aria-label="내 기록">☻</button></header><section className="goal-banner"><div><p className="eyebrow light">JLPT {profile.goal} 목표까지</p><strong>{days}<small>일</small></strong><p className="goal-date">{profile.examDate.replaceAll('-', '.')} 시험을 향해</p></div><div className="goal-ring"><span>{totalProgress}%</span><svg viewBox="0 0 44 44"><circle className="ring-bg" cx="22" cy="22" r="18" /><circle className="ring-value" cx="22" cy="22" r="18" style={{ strokeDashoffset: 113 - (113 * totalProgress) / 100 }} /></svg></div></section><section className="daily-quest"><span className="quest-badge">✦</span><div><strong>오늘의 목표</strong><small>레슨 1개를 끝내고 XP를 모아보세요</small></div><b>{progress.completedToday ? '1' : '0'}<small>/ 1</small></b><div className="quest-track"><i style={{ width: progress.completedToday ? '100%' : '0%' }} /></div></section><section className="current-path"><div className="section-heading"><div><p className="eyebrow">현재 위치</p><h2>{phase.title}</h2></div><span className="path-step">{phase.step}</span></div><div className="path-line"><span className="path-dot done" /><span className="path-line-fill" /><span className="path-dot current" /><span className="path-line-empty" /><span className="path-dot" /></div><div className="path-labels"><span>입문</span><strong>{currentLesson.title}</strong><span>{profile.goal}</span></div></section><section className="today-card"><div className="today-heading"><div><p className="eyebrow">오늘의 학습 <span className="today-dot" /></p><h2>지금은 이것부터 해볼까요?</h2></div><span className="today-time">{profile.dailyMinutes}분</span></div><div className="study-tasks"><TaskRow icon="あ" label={currentLesson.title} duration={`${currentLesson.duration}분`} active /><TaskRow icon="単" label="오늘의 단어 복습" duration="10분" /><TaskRow icon="文" label="기초 문법 한 문제" duration="5분" /></div><button className="primary-button wide" onClick={onStart}><span className="play-icon">▶</span> 오늘 학습 시작</button></section><section className="stats-grid"><StatCard label="연속 학습일" value={`${progress.streak}일`} icon="◷" /><StatCard label="누적 학습 시간" value={`${progress.totalMinutes}분`} icon="↗" /><StatCard label="정답률" value={progress.answeredQuestionIds.length ? `${accuracy}%` : '—'} icon="✓" /></section><NotificationConsentCard completedLessons={progress.completedLessons.length} /><RewardedAdCard /><BannerAd /><section className="insight-card"><div className="insight-icon">✦</div><div><p className="eyebrow">오늘의 추천</p><h3>{reviewCount ? '오답 복습을 먼저 해보세요' : '문자부터 탄탄하게 시작해요'}</h3><p>{reviewCount ? `아직 확인하지 않은 오답이 ${reviewCount}개 있어요.` : '소리와 글자를 연결하면 이후 학습 속도가 빨라져요.'}</p></div><button onClick={() => onNavigate(reviewCount ? 'review' : 'roadmap')}>→</button></section></>
+  const currentLesson = getLesson(progress.currentLessonId)
+  const phase = getPhase(currentLesson.phaseId)
+  const days = daysUntil(profile.examDate)
+  const goalPhases = phasesForGoal(profile.goal)
+  const totalProgress = Math.round(goalPhases.reduce((sum, item) => sum + (progress.phaseProgress[item.id] ?? 0), 0) / goalPhases.length)
+  const dueReviews = progress.wrongAnswers.filter((item) => !item.resolved && isReviewDue(item.nextReviewAt)).length + progress.wordReviews.filter((item) => !item.mastered && isReviewDue(item.nextReviewAt)).length
+  const accuracy = progress.answeredQuestionIds.length ? Math.round((progress.correctQuestionIds.length / progress.answeredQuestionIds.length) * 100) : 0
+  const xp = progress.totalMinutes * 10 + progress.correctQuestionIds.length * 5 + progress.completedLessons.length * 20 + progress.bonusXp
+  const today = dateKey()
+  const todayActivity = progress.activityByDate[today] ?? { lessons: 0, reviews: 0, news: 0, minutes: 0 }
+  const reviewTarget = Math.min(5, dueReviews + todayActivity.reviews)
+  const reviewDone = dueReviews === 0 || todayActivity.reviews >= reviewTarget
+  const missions = [
+    { id: 'review', icon: '↻', label: reviewDone ? '오늘 복습 완료' : `기억할 복습 ${reviewTarget - todayActivity.reviews}개`, duration: reviewDone ? '완료' : `${Math.min((reviewTarget - todayActivity.reviews) * 2, 10)}분`, done: reviewDone, action: () => onNavigate('review') },
+    { id: 'lesson', icon: 'あ', label: currentLesson.title, duration: `${currentLesson.duration}분`, done: todayActivity.lessons > 0, action: onStart },
+    { id: 'news', icon: '読', label: '오늘의 일본어 뉴스', duration: '3분', done: todayActivity.news > 0, action: () => onNavigate('news') },
+  ]
+  const completedMissions = missions.filter((mission) => mission.done).length
+  const nextMission = missions.find((mission) => !mission.done) ?? missions[1]
+  const weekKeys = weekDateKeys(today)
+  const weeklyDays = weekKeys.filter((key) => progress.studyDates.includes(key)).length
+  const inactiveDays = progress.lastStudyDate ? Math.floor((new Date(`${today}T12:00:00`).getTime() - new Date(`${progress.lastStudyDate}T12:00:00`).getTime()) / 86_400_000) : 0
+
+  return <>
+    <header className="topbar"><div><p className="brand-mini">japanese-lingo</p><p className="greeting">안녕하세요, <strong>{profile.name}</strong>님 <span>✦</span></p><div className="top-status"><span>🔥 {progress.streak}일 연속</span><span>⚡ {xp} XP</span></div></div><button className="icon-button" onClick={() => onNavigate('profile')} aria-label="내 기록">☻</button></header>
+    {inactiveDays >= 3 && <section className="comeback-card"><span> 다시 시작</span><div><strong>밀린 공부는 잠시 내려놓아요</strong><p>오늘은 복습 몇 개만 풀어도 충분합니다.</p></div><button onClick={() => onNavigate(dueReviews ? 'review' : 'learn')}>3분 재시작 →</button></section>}
+    <section className="goal-banner"><div><p className="eyebrow light">JLPT {profile.goal} 목표까지</p><strong>{days}<small>일</small></strong><p className="goal-date">{profile.examDate.replaceAll('-', '.')} 시험을 향해</p></div><div className="goal-ring"><span>{totalProgress}%</span><svg viewBox="0 0 44 44"><circle className="ring-bg" cx="22" cy="22" r="18" /><circle className="ring-value" cx="22" cy="22" r="18" style={{ strokeDashoffset: 113 - (113 * totalProgress) / 100 }} /></svg></div></section>
+    <section className="daily-quest"><span className="quest-badge">✦</span><div><strong>오늘의 5분 미션</strong><small>복습부터 새 학습까지 내 상태에 맞춰 준비했어요</small></div><b>{completedMissions}<small>/ {missions.length}</small></b><div className="quest-track"><i style={{ width: `${(completedMissions / missions.length) * 100}%` }} /></div></section>
+    <section className="weekly-consistency"><div><strong>이번 주 {weeklyDays}/5일</strong><small>{weeklyDays >= 5 ? '이번 주 목표를 달성했어요!' : `${5 - weeklyDays}일 더 학습하면 목표 달성`}</small></div><div className="week-dots">{weekKeys.map((key, index) => <span key={key} className={progress.studyDates.includes(key) ? 'done' : key === today ? 'today' : ''}><i>{progress.studyDates.includes(key) ? '✓' : ''}</i><small>{['월', '화', '수', '목', '금', '토', '일'][index]}</small></span>)}</div></section>
+    <section className="current-path"><div className="section-heading"><div><p className="eyebrow">현재 위치</p><h2>{phase.title}</h2></div><span className="path-step">{phase.step}</span></div><div className="path-line"><span className="path-dot done" /><span className="path-line-fill" /><span className="path-dot current" /><span className="path-line-empty" /><span className="path-dot" /></div><div className="path-labels"><span>입문</span><strong>{currentLesson.title}</strong><span>{profile.goal}</span></div></section>
+    <section className="today-card"><div className="today-heading"><div><p className="eyebrow">오늘의 학습 <span className="today-dot" /></p><h2>{completedMissions === missions.length ? '오늘의 학습을 모두 마쳤어요' : '다음 한 가지만 해볼까요?'}</h2></div><span className="today-time">최소 5분</span></div><div className="study-tasks">{missions.map((mission) => <TaskRow key={mission.id} icon={mission.icon} label={mission.label} duration={mission.duration} active={mission.id === nextMission.id} done={mission.done} onClick={mission.action} />)}</div><button className="primary-button wide" onClick={nextMission.action}><span className="play-icon">▶</span>{completedMissions === missions.length ? '학습 더 이어가기' : `${nextMission.label} 시작`}</button></section>
+    <section className="stats-grid"><StatCard label="연속 학습일" value={`${progress.streak}일`} icon="◷" /><StatCard label="누적 학습 시간" value={`${progress.totalMinutes}분`} icon="↗" /><StatCard label="정답률" value={progress.answeredQuestionIds.length ? `${accuracy}%` : '—'} icon="✓" /></section>
+    <NotificationConsentCard completedLessons={progress.completedLessons.length} /><RewardedAdCard /><BannerAd />
+    <section className="insight-card"><div className="insight-icon">✦</div><div><p className="eyebrow">오늘의 추천</p><h3>{dueReviews ? '지금이 다시 기억하기 좋은 때예요' : '새로운 내용을 배울 준비가 됐어요'}</h3><p>{dueReviews ? `오늘 복습할 항목이 ${dueReviews}개 있어요.` : '예정된 복습을 모두 마쳤습니다.'}</p></div><button onClick={() => onNavigate(dueReviews ? 'review' : 'roadmap')}>→</button></section>
+  </>
 }
 
-function TaskRow({ icon, label, duration, active = false }: { icon: string; label: string; duration: string; active?: boolean }) { return <div className={active ? 'task-row active' : 'task-row'}><span className="task-icon">{icon}</span><span>{label}</span><small>{duration}</small><span className="task-check">{active ? '→' : '○'}</span></div> }
+function TaskRow({ icon, label, duration, active = false, done = false, onClick }: { icon: string; label: string; duration: string; active?: boolean; done?: boolean; onClick: () => void }) { return <button className={`task-row${active ? ' active' : ''}${done ? ' done' : ''}`} onClick={onClick}><span className="task-icon">{icon}</span><span>{label}</span><small>{duration}</small><span className="task-check">{done ? '✓' : active ? '→' : '○'}</span></button> }
 function StatCard({ label, value, icon }: { label: string; value: string; icon: string }) { return <div className="stat-card"><span className="stat-icon">{icon}</span><small>{label}</small><strong>{value}</strong></div> }
 
 function RoadmapScreen({ progress, goal, onStartLesson }: { progress: UserProgress; goal: JlptLevel; onStartLesson: (id: string) => void }) {
@@ -256,13 +306,14 @@ function RoadmapScreen({ progress, goal, onStartLesson }: { progress: UserProgre
   return <><PageHeader eyebrow="YOUR JOURNEY" title={`${goal}까지의 로드맵`} description="지금의 위치에서 다음 한 걸음만 생각해요." />{goal === 'N1' && <div className="plan-note roadmap-goal-note"><span>✦</span><p>현재 코스는 N2 실전까지 제공돼요. N2를 완료하면 N1 학습 코스를 이어서 확장할 수 있어요.</p></div>}<div className="roadmap-list">{visiblePhases.map((phase, index) => { const phaseLessons = lessons.filter((lesson) => lesson.phaseId === phase.id); const value = progress.phaseProgress[phase.id] ?? 0; const unlocked = index === 0 || (progress.phaseProgress[visiblePhases[index - 1].id] ?? 0) >= 70; return <section className={unlocked ? 'phase-card' : 'phase-card locked'} key={phase.id}><div className="phase-marker" style={{ background: phase.color }}>{index === 0 ? '✓' : phase.step.replace('STEP ', '')}</div><div className="phase-main"><div className="phase-heading"><div><span className="phase-step">{phase.step}</span><h2>{phase.title}</h2><p>{phase.subtitle}</p></div><strong className="phase-percent">{value}%</strong></div><div className="bar"><i style={{ width: `${value}%`, background: phase.color }} /></div><p className="phase-description">{phase.description}</p><div className="unit-chips">{phase.unitTitles.map((title) => <span key={title}>{title}</span>)}</div>{unlocked && phaseLessons.length > 0 && <button className="outline-button" onClick={() => onStartLesson(phaseLessons.find((lesson) => !progress.completedLessons.includes(lesson.id))?.id ?? phaseLessons[0].id)}>{value > 0 ? '이어서 학습' : index === 0 ? '첫 레슨 시작' : '미리보기'} <span>→</span></button>}</div></section> })}</div></>
 }
 
-function LearnScreen({ progress, onStartLesson }: { progress: UserProgress; onStartLesson: (id: string) => void }) {
+function LearnScreen({ progress, onStartLesson, onNavigate }: { progress: UserProgress; onStartLesson: (id: string) => void; onNavigate: (view: View) => void }) {
   const next = getLesson(progress.currentLessonId)
-  return <><PageHeader eyebrow="LEARN" title="학습하기" description="짧은 레슨 하나가 오늘의 실력이 됩니다." /><section className="next-lesson-card"><div className="lesson-label">NEXT LESSON <span>{next.level}</span></div><h2>{next.title}</h2><p>{next.subtitle}</p><div className="lesson-meta"><span>◷ {next.duration}분</span><span>◌ {next.category}</span></div><button className="primary-button" onClick={() => onStartLesson(next.id)}>레슨 시작 <span>→</span></button></section><div className="section-heading compact"><div><p className="eyebrow">전체 레슨</p><h2>순서대로 쌓아가요</h2></div><span className="muted-text">{progress.completedLessons.length}/{lessons.length}</span></div><div className="lesson-list">{lessons.map((lesson, index) => <button key={lesson.id} className={progress.completedLessons.includes(lesson.id) ? 'lesson-list-item done' : lesson.id === next.id ? 'lesson-list-item current' : 'lesson-list-item'} onClick={() => onStartLesson(lesson.id)}><span className="lesson-index">{progress.completedLessons.includes(lesson.id) ? '✓' : String(index + 1).padStart(2, '0')}</span><span className="lesson-list-copy"><strong>{lesson.title}</strong><small>{lesson.subtitle}</small></span><span className="lesson-list-meta">{lesson.duration}분 <b>→</b></span></button>)}</div></>
+  const kanaCount = Object.values(progress.kanaMastery).filter((item) => item.mastered).length
+  return <><PageHeader eyebrow="LEARN" title="학습하기" description="짧은 레슨 하나가 오늘의 실력이 됩니다." /><button className="kana-launch-card" onClick={() => onNavigate('kana')}><span className="kana-launch-mark">あ</span><span><strong>히라가나·가타카나 만점 연습실</strong><small>문자표 · 취약 글자 우선 출제 · {kanaCount}/208자 숙달</small></span><b>→</b></button><section className="next-lesson-card"><div className="lesson-label">NEXT LESSON <span>{next.level}</span></div><h2>{next.title}</h2><p>{next.subtitle}</p><div className="lesson-meta"><span>◷ {next.duration}분</span><span>◌ {next.category}</span></div><button className="primary-button" onClick={() => onStartLesson(next.id)}>레슨 시작 <span>→</span></button></section><div className="section-heading compact"><div><p className="eyebrow">전체 레슨</p><h2>순서대로 쌓아가요</h2></div><span className="muted-text">{progress.completedLessons.length}/{lessons.length}</span></div><div className="lesson-list">{lessons.map((lesson, index) => <button key={lesson.id} className={progress.completedLessons.includes(lesson.id) ? 'lesson-list-item done' : lesson.id === next.id ? 'lesson-list-item current' : 'lesson-list-item'} onClick={() => onStartLesson(lesson.id)}><span className="lesson-index">{progress.completedLessons.includes(lesson.id) ? '✓' : String(index + 1).padStart(2, '0')}</span><span className="lesson-list-copy"><strong>{lesson.title}</strong><small>{lesson.subtitle}</small></span><span className="lesson-list-meta">{lesson.duration}분 <b>→</b></span></button>)}</div></>
 }
 
 function MoreScreen({ onNavigate }: { onNavigate: (view: View) => void }) {
-  return <><PageHeader eyebrow="MORE" title="더보기" description="학습 기록과 JLPT 시험 정보를 확인해요." /><div className="more-menu-list"><button className="more-menu-item" onClick={() => onNavigate('roadmap')}><span className="more-menu-icon blue">◎</span><span><strong>학습 로드맵</strong><small>입문부터 목표 레벨까지의 학습 순서</small></span><b>→</b></button><button className="more-menu-item" onClick={() => onNavigate('exam')}><span className="more-menu-icon blue">▣</span><span><strong>JLPT 시험 정보</strong><small>과목, 시험 시간, 합격·과락 기준</small></span><b>→</b></button><button className="more-menu-item" onClick={() => onNavigate('profile')}><span className="more-menu-icon purple">☻</span><span><strong>내 학습 기록</strong><small>학습 통계와 AI 일본어 튜터</small></span><b>→</b></button></div><section className="more-tip"><span>✦</span><div><p className="eyebrow">JLPT JOURNEY</p><h3>시험 정보와 학습 기록을 함께 확인해요</h3><p>현재 진도와 목표 시험을 비교하면서 다음 학습을 계획할 수 있어요.</p></div></section></>
+  return <><PageHeader eyebrow="MORE" title="더보기" description="문자부터 JLPT까지 학습 흐름을 관리해요." /><div className="more-menu-list"><button className="more-menu-item" onClick={() => onNavigate('kana')}><span className="more-menu-icon blue">あ</span><span><strong>문자 마스터</strong><small>히라가나·가타카나 문자표와 만점 연습</small></span><b>→</b></button><button className="more-menu-item" onClick={() => onNavigate('roadmap')}><span className="more-menu-icon blue">◎</span><span><strong>학습 로드맵</strong><small>입문부터 목표 레벨까지의 학습 순서</small></span><b>→</b></button><button className="more-menu-item" onClick={() => onNavigate('exam')}><span className="more-menu-icon blue">▣</span><span><strong>JLPT 시험 정보</strong><small>과목, 시험 시간, 합격·과락 기준</small></span><b>→</b></button><button className="more-menu-item" onClick={() => onNavigate('profile')}><span className="more-menu-icon purple">☻</span><span><strong>내 학습 기록</strong><small>학습 통계와 AI 일본어 튜터</small></span><b>→</b></button></div><section className="more-tip"><span>✦</span><div><p className="eyebrow">JLPT JOURNEY</p><h3>문자를 먼저 완성하면 독해 속도가 달라져요</h3><p>히라가나·가타카나는 매일 10문제씩 취약 글자를 우선 복습할 수 있어요.</p></div></section></>
 }
 
 function ExamInfoScreen({ goal }: { goal: JlptLevel }) {
@@ -293,15 +344,81 @@ function QuizRunner({ lesson, onComplete, onAnswer }: { lesson: Lesson; onComple
 function LessonResult({ lesson, results, onFinish }: { lesson: Lesson; results: QuizResult[]; onFinish: () => void }) { const correct = results.filter((result) => result.correct).length; const percent = Math.round((correct / results.length) * 100); const [finishing, setFinishing] = useState(false); const finish = () => { if (finishing) return; setFinishing(true); onFinish() }; return <div className="result-screen"><div className="result-hero"><div className="result-orbit"><span>{percent}<small>%</small></span><svg viewBox="0 0 120 120"><circle cx="60" cy="60" r="49" /><circle className="result-circle" cx="60" cy="60" r="49" style={{ strokeDashoffset: 308 - (308 * percent) / 100 }} /></svg></div><p className="eyebrow">LESSON COMPLETE</p><h1>{percent >= 70 ? '좋은 흐름이에요!' : '끝까지 해냈어요!'}</h1><p>{lesson.title} · {results.length}문제 중 {correct}문제 정답</p></div><section className="result-breakdown"><div><span>정답률</span><strong>{percent}%</strong></div><div><span>학습 시간</span><strong>{lesson.duration}분</strong></div><div><span>다음 단계</span><strong>복습</strong></div></section>{percent < 100 && <div className="result-message"><span>↻</span><p>틀린 문제는 오답노트에 저장했어요.<br />잠시 후 다시 만나면 더 오래 기억할 수 있어요.</p></div>}<button className="primary-button wide" disabled={finishing} onClick={finish}>{finishing ? '오늘 학습을 저장하는 중…' : '학습 마치기'} <span>→</span></button></div> }
 
 function ReviewScreen({ progress, onUpdate }: { progress: UserProgress; onUpdate: (next: UserProgress) => void }) {
-  const pending = progress.wrongAnswers.filter((item) => !item.resolved); const [reviewing, setReviewing] = useState(false); const [index, setIndex] = useState(0); const [showAnswer, setShowAnswer] = useState(false)
-  const markDone = () => { const done = pending[index]; const doneId = done?.id; const question = done ? getQuestion(done.questionId) : undefined; const nextWrong = progress.wrongAnswers.map((item) => item.id === doneId ? { ...item, resolved: true } : item); logAppEvent('review_item_completed', { question_id: done?.questionId, question_level: question ? levelForLessonId(question.lessonId) : undefined, category: question?.category, remaining_count: Math.max(0, pending.length - index - 1) }); onUpdate({ ...progress, wrongAnswers: nextWrong, reviewItemIds: nextWrong.filter((item) => !item.resolved).map((item) => item.id) }); if (index >= pending.length - 1) { logAppEvent('review_session_completed', { reviewed_count: pending.length }); setReviewing(false); setIndex(0); setShowAnswer(false) } else { setIndex(index + 1); setShowAnswer(false) } }
-  if (reviewing && pending[index]) { const wrong = pending[index]; const question = getQuestion(wrong.questionId); if (!question) return null; return <div className="review-session"><div className="quiz-top"><span>복습 {index + 1} / {pending.length}</span><div className="quiz-progress"><i style={{ width: `${((index + 1) / pending.length) * 100}%` }} /></div><span>오답</span></div><div className="review-question"><span className="question-type">{question.category}</span><h1>{question.prompt}</h1><div className="your-answer"><small>내가 고른 답</small><strong>{wrong.selected}</strong></div>{showAnswer ? <div className="explanation correct-box"><strong>정답 · {question.answer}</strong><p>{question.explanation}</p><small>관련 포인트 · {question.tip}</small></div> : <button className="secondary-button wide" onClick={() => setShowAnswer(true)}>정답과 해설 보기</button>}</div>{showAnswer && <button className="primary-button wide" onClick={markDone}>복습 완료 <span>→</span></button>}</div> }
-  return <><PageHeader eyebrow="REVIEW" title="복습하기" description="틀린 문제를 다시 만나면 실력이 됩니다." /><section className="review-summary"><div><span className="review-big-number">{pending.length}</span><p>오늘 확인할 오답</p></div><div className="review-summary-icon">↻</div></section><div className="review-categories"><ReviewCategory label="단어" value={Math.min(15, vocabulary.length)} icon="単" color="blue" /><ReviewCategory label="한자" value={Math.min(8, kanji.length)} icon="漢" color="orange" /><ReviewCategory label="문법" value={Math.min(5, grammar.length)} icon="文" color="purple" /><ReviewCategory label="오답" value={pending.length} icon="!”" color="green" /></div>{pending.length ? <button className="primary-button wide review-start" onClick={() => setReviewing(true)}>오늘의 복습 시작 <span>→</span></button> : <div className="empty-state"><span>✦</span><h2>복습할 오답이 없어요</h2><p>레슨을 마치면 틀린 문제를 자동으로 모아드려요.</p></div>}<section className="weakness-section"><div className="section-heading compact"><div><p className="eyebrow">INSIGHT</p><h2>나의 학습 분석</h2></div></div><WeaknessChart progress={progress} /></section></>
+  const dueWrong = progress.wrongAnswers.filter((item) => !item.resolved && isReviewDue(item.nextReviewAt))
+  const dueWords = progress.wordReviews.filter((item) => !item.mastered && isReviewDue(item.nextReviewAt))
+  const dueItems = [
+    ...dueWrong.map((item) => ({ kind: 'wrong' as const, item })),
+    ...dueWords.map((item) => ({ kind: 'word' as const, item })),
+  ].slice(0, 5)
+  const [reviewing, setReviewing] = useState(false)
+  const [sessionItems, setSessionItems] = useState<typeof dueItems>([])
+  const [index, setIndex] = useState(0)
+  const [selected, setSelected] = useState('')
+  const [revealed, setRevealed] = useState(false)
+  const items = reviewing && sessionItems.length ? sessionItems : dueItems
+  useEffect(() => { if (reviewing && sessionItems.length === 0) setSessionItems(items) }, [reviewing, sessionItems.length])
+
+  const finishItem = (remembered: boolean) => {
+    const current = sessionItems[index]
+    if (!current) return
+    let next = progress
+    if (current.kind === 'wrong') {
+      const scheduled = scheduleWrongAnswer(current.item, remembered)
+      const wrongAnswers = progress.wrongAnswers.map((item) => item.id === scheduled.id ? scheduled : item)
+      next = { ...progress, wrongAnswers, reviewItemIds: wrongAnswers.filter((item) => !item.resolved).map((item) => item.id) }
+      const question = getQuestion(current.item.questionId)
+      logAppEvent('review_item_completed', { question_id: current.item.questionId, question_level: question ? levelForLessonId(question.lessonId) : undefined, category: question?.category, remembered })
+    } else {
+      const scheduled = scheduleWordReview(current.item, remembered)
+      next = { ...progress, wordReviews: progress.wordReviews.map((item) => item.id === scheduled.id ? scheduled : item) }
+      logAppEvent('review_word_completed', { article_id: current.item.articleId, remembered })
+    }
+    next = recordActivity(next, 'reviews', 2)
+    onUpdate(next)
+    if (index >= sessionItems.length - 1) {
+      logAppEvent('review_session_completed', { reviewed_count: sessionItems.length })
+      setReviewing(false); setSessionItems([]); setIndex(0)
+    } else setIndex(index + 1)
+    setSelected(''); setRevealed(false)
+  }
+
+  if (reviewing && sessionItems[index]) {
+    const current = sessionItems[index]
+    if (current.kind === 'word') return <div className="review-session"><ReviewProgress index={index} total={items.length} label="단어" /><div className="review-question word-recall"><span className="question-type">뉴스 단어</span><h1 lang="ja">{current.item.word}</h1>{revealed ? <div className="explanation correct-box"><strong lang="ja">{current.item.reading}</strong><p>{current.item.meaning}</p></div> : <p>읽기와 뜻을 소리 내어 떠올려 보세요.</p>}</div>{revealed ? <div className="recall-actions"><button className="secondary-button" onClick={() => finishItem(false)}>다시 볼래요</button><button className="primary-button" onClick={() => finishItem(true)}>기억했어요</button></div> : <button className="primary-button wide" onClick={() => setRevealed(true)}>정답 확인 <span>→</span></button>}</div>
+    const question = getQuestion(current.item.questionId)
+    if (!question) return null
+    const checked = revealed
+    const correct = selected === question.answer
+    return <div className="review-session"><ReviewProgress index={index} total={items.length} label="오답" /><div className="review-question"><span className="question-type">{question.category}</span><h1>{question.prompt}</h1><div className="answer-options">{question.options.map((option, optionIndex) => <button key={option} disabled={checked} className={checked && option === question.answer ? 'answer-option correct' : checked && option === selected ? 'answer-option incorrect' : selected === option ? 'answer-option selected' : 'answer-option'} onClick={() => setSelected(option)}><span>{String.fromCharCode(65 + optionIndex)}</span>{option}</button>)}</div>{checked && <div className={correct ? 'explanation correct-box' : 'explanation incorrect-box'}><strong>{correct ? '기억했어요!' : `정답 · ${question.answer}`}</strong><p>{question.explanation}</p><small>TIP · {question.tip}</small></div>}</div><button className="primary-button wide" disabled={!selected} onClick={() => checked ? finishItem(correct) : setRevealed(true)}>{checked ? '다음 복습' : '정답 확인'} <span>→</span></button></div>
+  }
+
+  const futureCount = progress.wrongAnswers.filter((item) => !item.resolved).length + progress.wordReviews.filter((item) => !item.mastered).length - items.length
+  return <><PageHeader eyebrow="REVIEW" title="복습하기" description="기억이 흐려질 때 다시 만나 오래 남겨요." /><section className="review-summary"><div><span className="review-big-number">{items.length}</span><p>오늘 복습할 항목</p>{futureCount > 0 && <small>다음 일정에 {futureCount}개 대기 중</small>}</div><div className="review-summary-icon">↻</div></section><div className="review-categories"><ReviewCategory label="뉴스 단어" value={dueWords.length} icon="単" color="blue" /><ReviewCategory label="한자" value={Math.min(8, kanji.length)} icon="漢" color="orange" /><ReviewCategory label="문법" value={Math.min(5, grammar.length)} icon="文" color="purple" /><ReviewCategory label="오답" value={dueWrong.length} icon="!”" color="green" /></div>{items.length ? <button className="primary-button wide review-start" onClick={() => setReviewing(true)}>오늘의 복습 시작 <span>→</span></button> : <div className="empty-state"><span>✦</span><h2>오늘 복습은 끝났어요</h2><p>복습할 때가 되면 기억할 항목을 다시 보여드릴게요.</p></div>}<section className="weakness-section"><div className="section-heading compact"><div><p className="eyebrow">INSIGHT</p><h2>나의 학습 분석</h2></div></div><WeaknessChart progress={progress} /></section></>
 }
+function ReviewProgress({ index, total, label }: { index: number; total: number; label: string }) { return <div className="quiz-top"><span>복습 {index + 1} / {total}</span><div className="quiz-progress"><i style={{ width: `${((index + 1) / total) * 100}%` }} /></div><span>{label}</span></div> }
 function ReviewCategory({ label, value, icon, color }: { label: string; value: number; icon: string; color: string }) { return <div className="review-category"><span className={`review-icon ${color}`}>{icon}</span><strong>{value}<small>개</small></strong><span>{label}</span></div> }
 function WeaknessChart({ progress }: { progress: UserProgress }) { const categories = Object.entries(progress.categoryAccuracy).filter(([category]) => ['문자', '어휘', '문법', '한자', '독해'].includes(category)); return <div className="weakness-chart">{categories.map(([category, value]) => <div className="weakness-row" key={category}><span>{category}</span><div className="bar"><i style={{ width: `${value || 0}%` }} /></div><strong>{value || 0}%</strong></div>)}</div> }
 
-function ProfileScreen({ profile, progress, tutorOpen, setTutorOpen }: { profile: UserProfile; progress: UserProgress; tutorOpen: boolean; setTutorOpen: (open: boolean) => void }) { return <><PageHeader eyebrow="MY RECORD" title="나의 학습 기록" description="조금씩 쌓인 오늘을 확인해요." /><section className="profile-card"><div className="profile-avatar">カ</div><div><p className="eyebrow">JLPT {profile.goal} LEARNER</p><h2>{profile.name}님</h2><p>하루 {profile.dailyMinutes}분 · {profile.examDate.replaceAll('-', '.')} 목표</p></div></section><section className="profile-stats"><div><strong>{progress.streak}</strong><span>연속 학습일</span></div><div><strong>{progress.totalMinutes}</strong><span>누적 학습 분</span></div><div><strong>{progress.completedLessons.length}</strong><span>완료 레슨</span></div></section><button className="ai-tutor-card" onClick={() => setTutorOpen(!tutorOpen)}><span className="ai-icon">✦</span><span><strong>AI 일본어 튜터</strong><small>문법과 표현이 궁금할 때 물어보세요</small></span><b>{tutorOpen ? '×' : '→'}</b></button>{tutorOpen && <TutorPanel level={profile.goal} /> }<section className="data-card"><p className="eyebrow">MY CONTENT</p><div><span>단어 라이브러리</span><strong>{vocabulary.length}개 <b>→</b></strong></div><div><span>기초 한자</span><strong>{kanji.length}개 <b>→</b></strong></div><div><span>문법 노트</span><strong>{grammar.length}개 <b>→</b></strong></div></section><a className="legal-link" href="/terms.html">서비스 이용약관 <span>↗</span></a></> }
+function ProfileScreen({ profile, progress, tutorOpen, setTutorOpen }: { profile: UserProfile; progress: UserProgress; tutorOpen: boolean; setTutorOpen: (open: boolean) => void }) {
+  const weekKeys = weekDateKeys()
+  const week = weekKeys.reduce((summary, key) => {
+    const activity = progress.activityByDate[key]
+    if (!activity) return summary
+    return { days: summary.days + 1, lessons: summary.lessons + activity.lessons, reviews: summary.reviews + activity.reviews, news: summary.news + activity.news, minutes: summary.minutes + activity.minutes }
+  }, { days: 0, lessons: 0, reviews: 0, news: 0, minutes: 0 })
+  const masteredWords = progress.wordReviews.filter((item) => item.mastered).length
+  const activeReviews = progress.wrongAnswers.filter((item) => !item.resolved).length + progress.wordReviews.filter((item) => !item.mastered).length
+  const weakest = Object.entries(progress.categoryAccuracy).filter(([, value]) => value > 0).sort((a, b) => a[1] - b[1])[0]
+  return <>
+    <PageHeader eyebrow="MY RECORD" title="나의 학습 기록" description="조금씩 쌓인 오늘을 확인해요." />
+    <section className="profile-card"><div className="profile-avatar">カ</div><div><p className="eyebrow">JLPT {profile.goal} LEARNER</p><h2>{profile.name}님</h2><p>하루 {profile.dailyMinutes}분 · {profile.examDate.replaceAll('-', '.')} 목표</p></div></section>
+    <section className="profile-stats"><div><strong>{progress.streak}</strong><span>연속 학습일</span></div><div><strong>{progress.totalMinutes}</strong><span>누적 학습 분</span></div><div><strong>{progress.completedLessons.length}</strong><span>완료 레슨</span></div></section>
+    <section className="weekly-report"><div className="weekly-report-heading"><div><p className="eyebrow">WEEKLY REPORT</p><h2>이번 주, {week.days}일 공부했어요</h2></div><strong>{week.days >= 5 ? '목표 달성 ✓' : `${week.days}/5일`}</strong></div><p>{week.days >= 5 ? '꾸준한 흐름이 만들어졌어요. 다음 주도 같은 리듬으로 이어가요.' : week.days ? `앞으로 ${5 - week.days}일만 더 학습하면 주간 목표를 달성해요.` : '오늘 5분부터 시작하면 이번 주 기록이 만들어져요.'}</p><div className="weekly-report-grid"><div><strong>{week.lessons}</strong><span>레슨</span></div><div><strong>{week.reviews}</strong><span>복습</span></div><div><strong>{week.news}</strong><span>뉴스</span></div><div><strong>{week.minutes}</strong><span>활동 분</span></div></div>{weakest && <div className="weekly-next"><span>다음 추천</span><p><strong>{weakest[0]}</strong> 정답률이 {weakest[1]}%예요. 다음 학습에서 먼저 보완해 보세요.</p></div>}</section>
+    <section className="mastery-card"><div><p className="eyebrow">LONG-TERM MEMORY</p><h3>오래 기억하고 있는 단어</h3></div><strong>{masteredWords}<small>개</small></strong><p>복습 중인 항목 {activeReviews}개 · 네 번 연속 기억하면 숙달돼요.</p></section>
+    <button className="ai-tutor-card" onClick={() => setTutorOpen(!tutorOpen)}><span className="ai-icon">✦</span><span><strong>AI 일본어 튜터</strong><small>문법과 표현이 궁금할 때 물어보세요</small></span><b>{tutorOpen ? '×' : '→'}</b></button>{tutorOpen && <TutorPanel level={profile.goal} />}
+    <section className="data-card"><p className="eyebrow">MY CONTENT</p><div><span>저장한 뉴스 단어</span><strong>{progress.wordReviews.length}개 <b>→</b></strong></div><div><span>기초 한자</span><strong>{kanji.length}개 <b>→</b></strong></div><div><span>문법 노트</span><strong>{grammar.length}개 <b>→</b></strong></div></section><a className="legal-link" href="/terms.html">서비스 이용약관 <span>↗</span></a>
+  </>
+}
 
 function TutorPanel({ level }: { level: JlptLevel }) {
   const rewarded = useFullscreenAd('rewarded')

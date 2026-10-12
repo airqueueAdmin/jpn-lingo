@@ -2,7 +2,7 @@ import type { JlptLevel } from './data/jlpt'
 
 export type Experience = 'new' | 'kana' | 'basic' | 'n5-n4' | 'n3' | 'n2'
 export type DailyMinutes = 15 | 30 | 45 | 60 | 90
-export type View = 'home' | 'roadmap' | 'learn' | 'review' | 'profile' | 'exam' | 'more' | 'news'
+export type View = 'home' | 'roadmap' | 'learn' | 'review' | 'profile' | 'exam' | 'more' | 'news' | 'kana'
 export type QuestionType = 'multiple-choice' | 'reading' | 'fill-blank' | 'grammar'
 
 export interface UserProfile {
@@ -40,10 +40,26 @@ export interface Phase {
   id: string; step: string; title: string; subtitle: string; description: string; color: string; unitTitles: string[]
 }
 
-export interface WrongAnswer { id: string; questionId: string; selected: string; createdAt: string; resolved: boolean }
+export interface WrongAnswer {
+  id: string; questionId: string; selected: string; createdAt: string; resolved: boolean
+  nextReviewAt?: string; lastReviewedAt?: string; intervalDays?: number; correctStreak?: number; attempts?: number
+}
+
+export interface WordReviewItem {
+  id: string; articleId: string; word: string; reading: string; meaning: string; createdAt: string
+  nextReviewAt: string; lastReviewedAt?: string; intervalDays: number; correctStreak: number; attempts: number; mastered: boolean
+}
+
+export interface DailyActivity {
+  lessons: number; reviews: number; news: number; minutes: number
+}
 
 export interface UserProgress {
-  currentLessonId: string; completedLessons: string[]; answeredQuestionIds: string[]; correctQuestionIds: string[]; reviewItemIds: string[]; wrongAnswers: WrongAnswer[]; completedToday: boolean; totalMinutes: number; streak: number; bonusXp: number; lastStudyDate: string | null; phaseProgress: Record<string, number>; categoryAccuracy: Record<string, number>
+  currentLessonId: string; completedLessons: string[]; answeredQuestionIds: string[]; correctQuestionIds: string[]; reviewItemIds: string[]; wrongAnswers: WrongAnswer[]; wordReviews: WordReviewItem[]; completedToday: boolean; totalMinutes: number; streak: number; bonusXp: number; lastStudyDate: string | null; studyDates: string[]; activityByDate: Record<string, DailyActivity>; phaseProgress: Record<string, number>; categoryAccuracy: Record<string, number>; kanaMastery: Record<string, KanaMastery>
+}
+
+export interface KanaMastery {
+  attempts: number; correct: number; streak: number; mastered: boolean
 }
 
 export interface NewsSave { saved: boolean; updatedAt: string }

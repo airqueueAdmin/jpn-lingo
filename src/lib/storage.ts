@@ -1,10 +1,16 @@
 import type { AppState, UserProgress } from '../types'
 import { emptyNewsProgress, mergeNewsProgress, parseNewsProgress } from './news-progress'
+import { calculateStreak, dateKey, shiftDate } from './learning'
 
 const STORAGE_KEY = 'kana-step-app-state-v1'
 const ORIGIN_MIGRATION_KEY = 'japanese-lingo:origin-storage-migrated-v1'
 type TossModule = typeof import('@apps-in-toss/web-framework')
 let tossModulePromise: Promise<TossModule> | null = null
+
+function legacyStudyDates(lastStudyDate?: string | null, streak = 0) {
+  if (!lastStudyDate) return []
+  return Array.from({ length: Math.max(1, streak) }, (_, index) => shiftDate(lastStudyDate, -index)).sort()
+}
 
 function getTossModule() {
   tossModulePromise ??= import('@apps-in-toss/web-framework')
@@ -12,8 +18,8 @@ function getTossModule() {
 }
 
 export const defaultProgress: UserProgress = {
-  currentLessonId: 'hiragana-basic', completedLessons: [], answeredQuestionIds: [], correctQuestionIds: [], reviewItemIds: [], wrongAnswers: [], completedToday: false, totalMinutes: 0, streak: 0, bonusXp: 0, lastStudyDate: null,
-  phaseProgress: { intro: 12, basic: 0, n5: 0, n4: 0, n3: 0, n2: 0, mock: 0 }, categoryAccuracy: { '문자': 0, '어휘': 0, '문법': 0, '한자': 0, '독해': 0, '청해': 0 },
+  currentLessonId: 'hiragana-basic', completedLessons: [], answeredQuestionIds: [], correctQuestionIds: [], reviewItemIds: [], wrongAnswers: [], wordReviews: [], completedToday: false, totalMinutes: 0, streak: 0, bonusXp: 0, lastStudyDate: null, studyDates: [], activityByDate: {},
+  phaseProgress: { intro: 12, basic: 0, n5: 0, n4: 0, n3: 0, n2: 0, mock: 0 }, categoryAccuracy: { '문자': 0, '어휘': 0, '문법': 0, '한자': 0, '독해': 0, '청해': 0 }, kanaMastery: {},
 }
 
 export const initialState: AppState = { profile: null, progress: defaultProgress, news: emptyNewsProgress }
@@ -34,8 +40,12 @@ function parseState(raw: string | null): AppState | null {
         correctQuestionIds: parsedProgress.correctQuestionIds ?? [],
         reviewItemIds: parsedProgress.reviewItemIds ?? [],
         wrongAnswers: parsedProgress.wrongAnswers ?? [],
+        wordReviews: parsedProgress.wordReviews ?? [],
+        studyDates: parsedProgress.studyDates ?? legacyStudyDates(parsedProgress.lastStudyDate, parsedProgress.streak),
+        activityByDate: parsedProgress.activityByDate ?? {},
         phaseProgress: { ...defaultProgress.phaseProgress, ...(parsedProgress.phaseProgress ?? {}) },
         categoryAccuracy: { ...defaultProgress.categoryAccuracy, ...(parsedProgress.categoryAccuracy ?? {}) },
+        kanaMastery: { ...defaultProgress.kanaMastery, ...(parsedProgress.kanaMastery ?? {}) },
       },
     }
   } catch {
@@ -44,6 +54,45 @@ function parseState(raw: string | null): AppState | null {
 }
 
 function unique(values: string[]) { return Array.from(new Set(values)) }
+
+function mergeWordReviews(current: UserProgress['wordReviews'], previous: UserProgress['wordReviews']) {
+  const merged = new Map(previous.map((item) => [item.id, item]))
+  current.forEach((item) => {
+    const existing = merged.get(item.id)
+    if (!existing || (item.lastReviewedAt ?? item.createdAt) >= (existing.lastReviewedAt ?? existing.createdAt)) merged.set(item.id, item)
+  })
+  return Array.from(merged.values())
+}
+
+function mergeActivity(current: UserProgress['activityByDate'], previous: UserProgress['activityByDate']) {
+  const dates = unique([...Object.keys(previous), ...Object.keys(current)])
+  return Object.fromEntries(dates.map((date) => {
+    const a = current[date]
+    const b = previous[date]
+    if (!a) return [date, b]
+    if (!b) return [date, a]
+    return [date, {
+      lessons: Math.max(a.lessons, b.lessons), reviews: Math.max(a.reviews, b.reviews),
+      news: Math.max(a.news, b.news), minutes: Math.max(a.minutes, b.minutes),
+    }]
+  }))
+}
+
+function mergeKanaMastery(current: UserProgress['kanaMastery'], previous: UserProgress['kanaMastery']) {
+  const ids = unique([...Object.keys(previous), ...Object.keys(current)])
+  return Object.fromEntries(ids.map((id) => {
+    const a = current[id]
+    const b = previous[id]
+    if (!a) return [id, b]
+    if (!b) return [id, a]
+    return [id, {
+      attempts: Math.max(a.attempts, b.attempts),
+      correct: Math.max(a.correct, b.correct),
+      streak: Math.max(a.streak, b.streak),
+      mastered: a.mastered || b.mastered,
+    }]
+  }))
+}
 
 function mergeWrongAnswers(current: UserProgress['wrongAnswers'], previous: UserProgress['wrongAnswers']) {
   const merged = new Map<string, UserProgress['wrongAnswers'][number]>()
@@ -92,13 +141,17 @@ export function mergeAppStates(current: AppState, previous: AppState): AppState 
     correctQuestionIds: unique([...previousProgress.correctQuestionIds, ...currentProgress.correctQuestionIds]),
     reviewItemIds: wrongAnswers.filter((item) => !item.resolved).map((item) => item.id),
     wrongAnswers,
+    wordReviews: mergeWordReviews(currentProgress.wordReviews, previousProgress.wordReviews),
     completedToday: currentProgress.completedToday || previousProgress.completedToday,
     totalMinutes: Math.max(currentProgress.totalMinutes, previousProgress.totalMinutes),
-    streak: Math.max(currentProgress.streak, previousProgress.streak),
+    streak: calculateStreak(unique([...previousProgress.studyDates, ...currentProgress.studyDates])),
     bonusXp: Math.max(currentProgress.bonusXp, previousProgress.bonusXp),
     lastStudyDate: [currentProgress.lastStudyDate, previousProgress.lastStudyDate].filter(Boolean).sort().at(-1) ?? null,
+    studyDates: unique([...previousProgress.studyDates, ...currentProgress.studyDates]).sort(),
+    activityByDate: mergeActivity(currentProgress.activityByDate, previousProgress.activityByDate),
     phaseProgress,
     categoryAccuracy,
+    kanaMastery: mergeKanaMastery(currentProgress.kanaMastery, previousProgress.kanaMastery),
   }
   return {
     profile: current.profile?.onboardingComplete ? current.profile : previous.profile?.onboardingComplete ? previous.profile : current.profile ?? previous.profile,
@@ -137,7 +190,7 @@ export async function migrateOriginStorage(): Promise<AppState | null> {
 
 export function loadState(): AppState {
   const state = parseState(window.localStorage.getItem(STORAGE_KEY)) ?? initialState
-  return { ...state, progress: { ...state.progress, completedToday: state.progress.lastStudyDate === todayKey() ? state.progress.completedToday : false } }
+  return { ...state, progress: { ...state.progress, completedToday: state.progress.lastStudyDate === todayKey() ? state.progress.completedToday : false, streak: calculateStreak(state.progress.studyDates) } }
 }
 
 export function saveState(state: AppState) { window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state)) }
@@ -169,7 +222,7 @@ export async function saveNativeState(state: AppState) {
   }
 }
 
-export function todayKey() { return new Date().toISOString().slice(0, 10) }
+export function todayKey() { return dateKey() }
 
 export function daysUntil(date: string) {
   const target = new Date(`${date}T00:00:00`)

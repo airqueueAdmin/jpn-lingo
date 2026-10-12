@@ -1,4 +1,5 @@
 import type { Grammar, Kanji, Lesson, Phase, QuizQuestion, Vocabulary } from '../types'
+import { kanaCharacters, kanaLessonQuestionIds, kanaLessonTargets, type KanaCharacter } from './kana'
 
 export const phases: Phase[] = [
   { id: 'intro', step: 'STEP 0', title: '일본어 입문', subtitle: '문자와 소리에 익숙해져요', description: '히라가나부터 시작해 일본어를 읽는 감각을 만듭니다.', color: '#6176f4', unitTitles: ['히라가나', '가타카나', '발음 규칙', '장음·촉음·요음'] },
@@ -13,6 +14,10 @@ export const phases: Phase[] = [
 export const lessons: Lesson[] = [
   { id: 'hiragana-basic', phaseId: 'intro', title: '히라가나 기본음', subtitle: 'あ행부터 さ행까지 읽기', duration: 10, level: '입문', category: '문자', concept: '히라가나는 일본어를 적을 때 가장 먼저 만나는 문자예요. 오늘은 모음 소리와 あ행·か행·さ행을 익히고, 눈으로 보자마자 소리 내는 연습을 합니다.', examples: [{ japanese: 'あさ', reading: 'asa', korean: '아침' }, { japanese: 'すし', reading: 'sushi', korean: '초밥' }, { japanese: 'さけ', reading: 'sake', korean: '연어 / 술' }], keyPoints: ['あ a, い i, う u, え e, お o 순서로 외워요.', 'か행은 k + 모음, さ행은 s + 모음 소리예요.', '처음에는 글자를 쓰기보다 소리와 모양을 연결하는 데 집중해요.'], questionIds: ['q01', 'q02', 'q03', 'q04'] },
   { id: 'katakana-basic', phaseId: 'intro', title: '가타카나 기본음', subtitle: '외래어를 읽는 첫걸음', duration: 10, level: '입문', category: '문자', concept: '가타카나는 외래어, 상품명, 의성어 등에 자주 쓰여요. 히라가나와 소리는 같지만 모양이 다릅니다.', examples: [{ japanese: 'コーヒー', reading: 'koohii', korean: '커피' }, { japanese: 'ホテル', reading: 'hoteru', korean: '호텔' }], keyPoints: ['외래어를 만났을 때 가타카나를 먼저 의심해요.', 'ー는 앞 음절의 모음을 길게 늘이는 장음 부호예요.'], questionIds: ['q05', 'q06', 'q07'] },
+  { id: 'hiragana-gojuon', phaseId: 'intro', title: '히라가나 오십음도', subtitle: 'た행부터 ん까지 빈틈없이 읽기', duration: 12, level: '입문', category: '문자', concept: '히라가나 기본음은 단어를 읽는 가장 중요한 지도예요. 비슷한 모양을 행 단위로 묶어 보고, 글자를 보면 1초 안에 소리로 바꾸는 연습을 합니다.', examples: [{ japanese: 'たまご', reading: 'tamago', korean: '달걀' }, { japanese: 'なまえ', reading: 'namae', korean: '이름' }, { japanese: 'ふね', reading: 'fune', korean: '배' }], keyPoints: ['た행의 ち·つ는 ti·tu가 아니라 chi·tsu로 읽어요.', 'ふ는 hu보다 fu에 가까운 소리예요.', 'を는 조사로 쓰일 때 보통 o로 읽고, ん은 n 소리로 마무리해요.'], questionIds: kanaLessonQuestionIds.hiraganaRows },
+  { id: 'katakana-gojuon', phaseId: 'intro', title: '가타카나 오십음도', subtitle: '비슷한 모양을 구별해 외래어 읽기', duration: 12, level: '입문', category: '문자', concept: '가타카나는 모양이 직선적이고 외래어에서 자주 보여요. シ·ツ, ソ·ン처럼 헷갈리기 쉬운 글자는 방향과 획을 비교하며 익힙니다.', examples: [{ japanese: 'テレビ', reading: 'terebi', korean: '텔레비전' }, { japanese: 'カメラ', reading: 'kamera', korean: '카메라' }, { japanese: 'ツアー', reading: 'tsuaa', korean: '투어' }], keyPoints: ['シ와 ツ는 점의 방향을 함께 관찰해요.', 'ソ와 ン은 마지막 획의 방향이 달라요.', '가타카나를 읽을 때는 장음 ー와 작은 ャ·ュ·ョ도 같이 확인해요.'], questionIds: kanaLessonQuestionIds.katakanaRows },
+  { id: 'kana-voiced', phaseId: 'intro', title: '탁음·반탁음', subtitle: '゛와 ゜가 만드는 소리 변화', duration: 12, level: '입문', category: '문자', concept: '탁점(゛)과 반탁점(゜)은 기본음에 소리 변화를 더해요. が·ざ·だ·ば·ぱ행을 기본음과 섞어 읽으며 구별합니다.', examples: [{ japanese: 'がくせい', reading: 'gakusei', korean: '학생' }, { japanese: 'パン', reading: 'pan', korean: '빵' }, { japanese: 'でんわ', reading: 'denwa', korean: '전화' }], keyPoints: ['か행 + ゛는 ga행, は행 + ゛는 ba행이 돼요.', 'は행 + ゜는 pa행이 돼요.', 'じ·ぢ, ず·づ는 현대 일본어에서 발음이 비슷해도 표기를 구별해야 해요.'], questionIds: kanaLessonQuestionIds.voiced },
+  { id: 'kana-combinations', phaseId: 'intro', title: '요음 조합', subtitle: '작은 ゃ·ゅ·ょ를 한 박자로 읽기', duration: 12, level: '입문', category: '문자', concept: '요음은 きゃ처럼 i단 글자 뒤에 작은 ゃ·ゅ·ょ를 붙여 한 박자로 읽는 조합이에요. 두 박자로 늘여 읽지 않는 것이 핵심입니다.', examples: [{ japanese: 'きょう', reading: 'kyou', korean: '오늘' }, { japanese: 'しゃしん', reading: 'shashin', korean: '사진' }, { japanese: 'チョコ', reading: 'choko', korean: '초콜릿' }], keyPoints: ['きや가 아니라 きゃ처럼 한 덩어리로 읽어요.', 'しゃ·ちゃ·じゃ는 sha·cha·ja 소리로 기억해요.', '가타카나 요음은 외래어 표기에서 특히 자주 만나요.'], questionIds: kanaLessonQuestionIds.combinations },
   { id: 'pronunciation-rules', phaseId: 'intro', title: '일본어 발음 규칙', subtitle: '장음·촉음·요음 맛보기', duration: 12, level: '입문', category: '문자', concept: '일본어는 소리의 길이와 작은 글자가 뜻을 바꿀 수 있어요. 장음, 촉음, 요음을 구별하면 듣기와 읽기가 한결 쉬워집니다.', examples: [{ japanese: 'がっこう', reading: 'gakkou', korean: '학교' }, { japanese: 'きょう', reading: 'kyou', korean: '오늘' }], keyPoints: ['작은 っ는 뒤 자음을 한 박자 멈춰 발음해요.', 'ゃ・ゅ・ょ는 앞 글자와 합쳐 한 박자로 읽어요.'], questionIds: ['q08', 'q09', 'q10'] },
   { id: 'basic-sentence', phaseId: 'basic', title: '기본 문장 구조', subtitle: 'は와 です로 자기소개하기', duration: 12, level: '기초', category: '문법', concept: '일본어의 기본 문장은 주제 + 설명의 순서로 만들어요. 조사 は가 주제를 표시하고, です가 공손한 문장을 마무리합니다.', examples: [{ japanese: 'わたしは がくせいです。', reading: 'Watashi wa gakusei desu.', korean: '저는 학생입니다.' }, { japanese: 'これは ほんです。', reading: 'Kore wa hon desu.', korean: '이것은 책입니다.' }], keyPoints: ['は는 글자로는 ha지만 조사로 쓰이면 wa로 읽어요.', 'です는 명사·な형용사 뒤에서 공손하게 마무리해요.', '일본어 문장은 핵심 동사가 뒤에 오는 경우가 많아요.'], questionIds: ['q11', 'q12', 'q13'] },
   { id: 'basic-particles', phaseId: 'basic', title: '조사 は·が·を·に·で', subtitle: '문장 속 역할 구별하기', duration: 15, level: '기초', category: '문법', concept: '조사는 단어 사이의 역할을 알려주는 작은 표지판이에요. 한 번에 외우기보다 문장 안에서 무엇을 가리키는지 확인합니다.', examples: [{ japanese: '学校に 行きます。', reading: 'Gakkou ni ikimasu.', korean: '학교에 갑니다.' }, { japanese: '図書館で 勉強します。', reading: 'Toshokan de benkyou shimasu.', korean: '도서관에서 공부합니다.' }], keyPoints: ['を는 동작의 대상을 표시해요.', 'に는 도착점·시간·대상을 표시해요.', 'で는 동작이 일어나는 장소나 수단을 표시해요.'], questionIds: ['q14', 'q15', 'q16'] },
@@ -37,6 +42,17 @@ const lessonPronunciations: Record<string, string> = {
   '音楽を 聞きながら 勉強します。': '온가쿠오 키키나가라 벤쿄오 시마스',
   '日本語が 話せないわけではありません。': '니혼고가 하나세나이 와케데와 아리마센',
   '高いものが いつもいいわけではない。': '타카이 모노가 이츠모 이이 와케데와 나이',
+  'たまご': '타마고',
+  'なまえ': '나마에',
+  'ふね': '후네',
+  'テレビ': '테레비',
+  'カメラ': '카메라',
+  'ツアー': '츠아-',
+  'がくせい': '가쿠세이',
+  'パン': '팡',
+  'でんわ': '덴와',
+  'しゃしん': '샤신',
+  'チョコ': '초코',
 }
 
 lessons.forEach((lesson) => lesson.examples.forEach((example) => {
@@ -110,7 +126,23 @@ const questionSeeds: QuestionSeed[] = [
   ['q50','n2-grammar','grammar','문법','「그렇다고 해서 쉽다는 뜻은 아니다」의 핵심 표현은?','',['というわけではない','わけがない','ながら','に対して'],'というわけではない','앞 문장을 받아 그렇다고 해서 ~라는 뜻은 아니라고 말해요.','わけではない보다 앞 내용과의 연결감이 강해요.'],
 ]
 
-export const questions: QuizQuestion[] = questionSeeds.map(([id, lessonId, type, category, prompt, context, options, answer, explanation, tip]) => ({ id, lessonId, type, category, prompt, context: context || undefined, options, answer, explanation, tip }))
+function uniqueOptions(values: string[]) { return Array.from(new Set(values)) }
+
+function buildKanaQuestionSeeds(lessonKey: keyof typeof kanaLessonTargets, targets: KanaCharacter[]): QuestionSeed[] {
+  return targets.flatMap((target, index) => {
+    const pool = kanaCharacters.filter((item) => item.script === target.script && item.group === target.group && item.id !== target.id)
+    const readOptions = uniqueOptions([target.romaji, ...pool.slice(index, index + 4).map((item) => item.romaji), ...pool.map((item) => item.romaji)]).slice(0, 4)
+    const matchOptions = uniqueOptions([target.character, ...pool.slice(index, index + 4).map((item) => item.character), ...pool.map((item) => item.character)]).slice(0, 4)
+    const scriptName = target.script === 'hiragana' ? '히라가나' : '가타카나'
+    return [
+      [`kana-${lessonKey}-${target.id}-read`, lessonKey === 'hiraganaRows' ? 'hiragana-gojuon' : lessonKey === 'katakanaRows' ? 'katakana-gojuon' : lessonKey === 'voiced' ? 'kana-voiced' : 'kana-combinations', 'reading', '문자', `「${target.character}」의 로마자 읽기는?`, '', readOptions, target.romaji, `${target.character}는 ${target.romaji}로 읽어요.`, '소리 내어 세 번 읽고 다음 글자로 넘어가요.'],
+      [`kana-${lessonKey}-${target.id}-match`, lessonKey === 'hiraganaRows' ? 'hiragana-gojuon' : lessonKey === 'katakanaRows' ? 'katakana-gojuon' : lessonKey === 'voiced' ? 'kana-voiced' : 'kana-combinations', 'multiple-choice', '문자', `「${target.romaji}」에 해당하는 ${scriptName}는?`, '', matchOptions, target.character, `${target.romaji}는 ${target.character}예요.`, '글자의 모양과 소리를 한 쌍으로 떠올려 보세요.'],
+    ]
+  })
+}
+
+const kanaQuestionSeeds = Object.entries(kanaLessonTargets).flatMap(([key, targets]) => buildKanaQuestionSeeds(key as keyof typeof kanaLessonTargets, targets))
+export const questions: QuizQuestion[] = [...questionSeeds, ...kanaQuestionSeeds].map(([id, lessonId, type, category, prompt, context, options, answer, explanation, tip]) => ({ id, lessonId, type, category, prompt, context: context || undefined, options, answer, explanation, tip }))
 
 export const getLesson = (id: string) => lessons.find((lesson) => lesson.id === id) ?? lessons[0]
 export const getQuestion = (id: string) => questions.find((question) => question.id === id)
